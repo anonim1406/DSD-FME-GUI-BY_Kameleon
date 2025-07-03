@@ -1,4 +1,4 @@
-# main.py - DSD-FME GUI Frontend v8.3 (Final Stable Version)
+
 import sys
 import os
 import subprocess
@@ -8,8 +8,6 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtGui import QFont, QPalette, QColor, QTextCursor
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject, pyqtSlot
 
-# The embedded console feature has been removed in favor of a stable terminal log.
-# pywin32 is no longer required.
 
 CONFIG_FILE = 'dsd-fme-gui-config.json'
 
@@ -48,8 +46,7 @@ class DSDApp(QMainWindow):
         if self.dsd_fme_path:
             self._init_ui()
         else:
-            # If user cancels path selection, we can't proceed.
-            # Use QTimer to allow the constructor to finish before closing.
+            
             QTimer.singleShot(100, self.close)
 
     def _load_config_or_prompt(self):
@@ -193,7 +190,7 @@ class DSDApp(QMainWindow):
         for btn, flag in self.inverse_widgets.items():
             if btn.isChecked(): command.append(flag)
         
-        # Filter out None values that may have resulted from empty text boxes
+      
         final_command = [item for item in command if item is not None]
         self.cmd_preview.setText(subprocess.list2cmdline(final_command))
         return final_command
@@ -214,7 +211,7 @@ class DSDApp(QMainWindow):
             self.reader_thread = QThread(); self.reader_worker = ProcessReader(self.process)
             self.reader_worker.moveToThread(self.reader_thread)
             self.reader_worker.line_read.connect(self.update_terminal)
-            # This is the crucial connection: when the worker finishes, the cleanup slot is called.
+         
             self.reader_worker.finished.connect(self.on_process_finished)
             self.reader_thread.started.connect(self.reader_worker.run)
             self.reader_thread.start(); self.btn_start.setEnabled(False); self.btn_stop.setEnabled(True)
@@ -227,10 +224,9 @@ class DSDApp(QMainWindow):
         if self.process and self.process.poll() is None:
             self.btn_stop.setEnabled(False) # Prevent double clicks
             self.terminal_output.appendPlainText("\n--- SENDING STOP SIGNAL ---\n")
-            # Terminating the process will cause the stdout pipe to close,
-            # which will end the reader loop, which will emit finished, which cleans up.
+        
             self.process.terminate()
-            # As a fallback, kill forcefully after a timeout
+         
             try:
                 self.process.wait(timeout=2)
             except subprocess.TimeoutExpired:
