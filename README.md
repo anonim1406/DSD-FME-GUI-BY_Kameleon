@@ -57,7 +57,7 @@ This is a Python-based GUI frontend for `dsd-fme`, an advanced digital signal de
 
 5. **Open Terminal in that directory**, then run:
    ```bash
-   python3 DSD-FME_GUI.py
+   python3 DSD-FME-GUI-BY_Kameleon.py
    ```
 
 ---
@@ -142,7 +142,7 @@ GUI w Pythonie do `dsd-fme` — zaawansowanego dekodera cyfrowych sygnałów rad
 
 5. **Otwórz terminal** w tym folderze i uruchom GUI:
    ```bash
-   python3 DSD-FME_GUI.py
+   python3 DSD-FME-GUI-BY_Kameleon.py
    ```
 
 ---
