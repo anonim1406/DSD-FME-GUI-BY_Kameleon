@@ -6,7 +6,6 @@ import shlex
 import threading
 import csv
 
-# --- Sound Alert Import ---
 try:
     import winsound
     WINSOUND_AVAILABLE = True
@@ -44,8 +43,8 @@ class DSDApp(QMainWindow):
         self.reader_thread = None
         self.reader_worker = None
         
-        # --- State Management for Features ---
-        self.is_in_transmission = False # NEW: State flag for throttling
+       
+        self.is_in_transmission = False 
         self.alerts = []
         self.recording_dir = ""
         self.fs_watcher = QFileSystemWatcher()
