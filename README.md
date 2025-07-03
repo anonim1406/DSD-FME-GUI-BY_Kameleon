@@ -35,7 +35,7 @@ This GUI is **under active development** and may not yet support every single DS
 
 ---
 
-## 📂 Installation & Usage
+## 📂 Installation & Usage --> https://github.com/anonim1406/DSD-FME-GUI-BY_SP8UEV/blob/main/Installation%20%26%20Setup%20EN%20%26%20PL
 
 1. Download `dsd-fme.exe` from its [official GitHub](https://github.com/lwvmobile/dsd-fme).
 2. Run `DSD-FME-GUI-by_SP8UEV.py` using Python 3 with PyQt5 installed.
@@ -99,7 +99,7 @@ GUI pozwala łatwo ustawiać opcje i uruchamiać `dsd-fme.exe` bez potrzeby wpis
 
 ---
 
-## 🔧 Jak używać?
+## 🔧 Jak używać? -->https://github.com/anonim1406/DSD-FME-GUI-BY_SP8UEV/blob/main/Installation%20%26%20Setup%20EN%20%26%20PL
 
 1. Pobierz `dsd-fme.exe` z oficjalnego GitHuba: https://github.com/lwvmobile/dsd-fme  
 2. Uruchom `DSD-FME-GUI-by_SP8UEV.py` (wymaga Pythona 3 + PyQt5).
