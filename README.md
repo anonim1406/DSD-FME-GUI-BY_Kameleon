@@ -71,7 +71,7 @@ This is a Python-based GUI frontend for `dsd-fme`, an advanced digital signal de
 
 ## 👤 Author
 
-- **GUI Developer:** Kameleon (formerly SP8UEV)  
+- **GUI Developer:** Kameleon 
 - **Contact:** parrotos.desktop@protonmail.com  
 - *Note:* I did not create `dsd-fme` – I just made this GUI to make it easier to use.
 
@@ -156,7 +156,7 @@ GUI w Pythonie do `dsd-fme` — zaawansowanego dekodera cyfrowych sygnałów rad
 
 ## 👤 Autor
 
-- **Twórca GUI:** Kameleon (dawniej SP8UEV)  
+- **Twórca GUI:** Kameleon 
 - **Kontakt:** parrotos.desktop@protonmail.com  
 - *Uwaga:* Nie jestem autorem `dsd-fme` – tylko zrobiłem GUI, by korzystanie było prostsze.
 
