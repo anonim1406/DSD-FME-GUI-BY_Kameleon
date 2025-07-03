@@ -1,146 +1,169 @@
-# DSD-FME GUI by SP8UEV
 
-> A modern graphical interface for the powerful [DSD-FME](https://github.com/lwvmobile/dsd-fme) digital voice decoder — designed for humans, not just terminals.
+# DSD-FME GUI by Kameleon – Version 0.9
 
----
-
-## ⚠️ Status: Experimental Test Version
-
-This GUI is **under active development** and may not yet support every single DSD-FME option.  
-**Bugs? Glitches? Crashes?** Feel free to scream (or just email me nicely):  
-📬 **parrotos.desktop@protonmail.com**
+*A modern and user-friendly graphical interface for the powerful DSD-FME digital voice decoder – built for people, not just terminals.*
 
 ---
 
-## 🚀 What is this?
+## 🚀 What's New in v0.9
 
-**DSD-FME GUI by SP8UEV** is a standalone graphical frontend that helps you build and run `dsd-fme` commands with just a few clicks — no command-line voodoo required.
-
-🖥️ Features:
-- Auto command builder with visual parameter editing
-- Full DSD-FME flag coverage (in progress!)
-- Terminal-style output window
-- Clean dark theme, portable EXE-ready
-
-> 🔹 You must provide your own copy of `dsd-fme.exe` — this GUI does **not** include it.  
-> 🔹 On first launch, you'll be asked to locate your DSD-FME binary.
+- **Voice Event History:** Logs detected digital voice transmissions in a clear table.
+- **Voice-Activated Recorder:** Manage recordings based on voice activity.
+- **Audio Alerts:** Play custom sounds for specific Talkgroups (TG) or Radio IDs.
+- **CSV Export:** Save the voice log for further analysis.
+- **Log Search:** Quickly search within terminal output.
+- **Dark Mode:** Eyes-friendly dark UI theme.
 
 ---
 
-## 🧑‍💻 Author & Credit
+## ⚠️ Notes and Limitations
 
-- GUI Developer: **SP8UEV (Maciek)**
-- Contact: [parrotos.desktop@protonmail.com](mailto:parrotos.desktop@protonmail.com)
-- DSD-FME: Created by [lwvmobile](https://github.com/lwvmobile/dsd-fme) — I’m just the guy making it prettier 😉
-
----
-
-## 📂 Installation & Usage 
-Open terminal and install PyQt5: 
-
-pip install PyQt5
-
-Download the latest release of DSD-FME from:
-
-https://github.com/lwvmobile/dsd-fme
-
-...then extract the ZIP archive.
-Download this GUI script: 
-DSD-FME-GUI-BY_SP8UEV.py
-Place it in the same folder as dsd-fme.exe for best results.
-Open a terminal in that folder.
-Run the GUI: 
-
-python3 ./DSD-FME-GUI-BY_SP8UEV.py
+- **Run from Terminal Only:** Currently, double-clicking the script may not work properly due to audio handling. Use the terminal.
+- **Recording Feature is Experimental:** The recording function (in the "Recorder" tab) might not work in all situations.
 
 ---
 
-## 📜 Legal & Licensing
+## 🧠 What Is This?
 
-- This GUI **does not contain or modify DSD-FME itself**.
-- DSD-FME is licensed under **GPLv2** — so this GUI follows the same spirit.
-- You are free to fork, share, improve, and remix this GUI under compatible terms.
+This is a Python-based GUI frontend for `dsd-fme`, an advanced digital signal decoder (DMR, P25, NXDN, YSF, etc.). It simplifies usage by offering graphical configuration instead of long command-line arguments.
 
 ---
 
-## ❤️ Support the Project
+## 🔧 Features
 
-If you like this project and want to see more updates:
-- Send feedback
-- Report bugs
-- Maybe buy me a coffee (or send me a good DMR stream 😄)
+- Tab-based full configuration panel.
+- Live status display: TG, ID, Color Code, signal info.
+- History of decoded voice events with export option.
+- Configurable voice-activated recording system.
+- Custom sound alerts for TG/ID events.
+- Integrated log search.
+- Dark mode for comfortable use.
 
 ---
 
-## 🇵🇱 POLSKA WERSJA
+## 📦 How to Install & Run
+
+1. **Install PyQt5:**
+   ```bash
+   pip install PyQt5
+   ```
+
+2. **Download DSD-FME:**
+   [https://github.com/lwvmobile/dsd-fme](https://github.com/lwvmobile/dsd-fme)
+
+3. **Extract the ZIP archive.**
+
+4. **Place the GUI script** in the same directory as `dsd-fme.exe`.
+
+5. **Open Terminal in that directory**, then run:
+   ```bash
+   python3 DSD-FME_GUI.py
+   ```
 
 ---
 
-## ⚠️ Status: Wersja testowa
+## 📜 License
 
-To jest **eksperymentalna wersja testowa** GUI do `dsd-fme`. Nie wszystkie opcje są jeszcze w pełni obsługiwane.  
-**Masz błąd? Coś nie działa?**  
-Napisz do mnie: 📧 **parrotos.desktop@protonmail.com**
+- This GUI **does not include** or modify the `dsd-fme` code.
+- DSD-FME is GPLv2 licensed, so this GUI is also **open-source**.
+
+---
+
+## 👤 Author
+
+- **GUI Developer:** Kameleon (formerly SP8UEV)  
+- **Contact:** parrotos.desktop@protonmail.com  
+- *Note:* I did not create `dsd-fme` – I just made this GUI to make it easier to use.
+
+---
+
+## ❤️ Want to Help?
+
+- Report a bug 🐞  
+- Suggest a new feature 💡  
+- Or... send a clean DMR stream for testing 😄
+
+---
+
+# 🇵🇱 DSD-FME GUI by Kameleon – Wersja 0.9
+
+*Nowoczesny interfejs graficzny do potężnego dekodera DSD-FME — zaprojektowany z myślą o użytkowniku, nie tylko terminalu.*
+
+---
+
+## 🚀 Co nowego w wersji 0.9
+
+- **Historia zdarzeń głosowych:** Automatyczne logowanie transmisji w czytelnej tabeli.
+- **Nagrywanie aktywowane głosem:** Prosty manager nagrań z aktywacją głosem.
+- **Alerty dźwiękowe:** Powiadomienia dźwiękowe dla konkretnych TG lub ID.
+- **Eksport do CSV:** Zapis historii transmisji do pliku CSV.
+- **Wyszukiwanie w logu:** Szybkie znajdowanie informacji w konsoli.
+- **Ciemny motyw:** Przyjazny dla oczu interfejs graficzny.
+
+---
+
+## ⚠️ Ważne Uwagi
+
+- **Uruchamianie tylko z terminala:** Kliknięcie dwukrotne może nie działać poprawnie (problem z obsługą dźwięku). Użyj terminala.
+- **Nagrywanie jest eksperymentalne:** Funkcja nagrywania może nie działać w każdej sytuacji.
 
 ---
 
 ## 🧠 Co to jest?
 
-To **graficzny interfejs użytkownika (GUI)** do `dsd-fme`, czyli zaawansowanego dekodera sygnałów cyfrowych (DMR, P25, NXDN, YSF i inne).  
-GUI pozwala łatwo ustawiać opcje i uruchamiać `dsd-fme.exe` bez potrzeby wpisywania ręcznie długich komend.
-
-🔧 Funkcje:
-- Generowanie komend na podstawie kliknięć
-- Obsługa (prawie) wszystkich flag `dsd-fme`
-- Terminal do podglądu działania
-- Motyw ciemny, gotowy pod EXE
-
-> 🛑 GUI **nie zawiera** `dsd-fme.exe`. Trzeba go pobrać osobno.  
-> 🛠️ Przy pierwszym uruchomieniu zostaniesz poproszony o wskazanie jego lokalizacji.
+GUI w Pythonie do `dsd-fme` — zaawansowanego dekodera cyfrowych sygnałów radiowych (DMR, P25, NXDN, YSF itd.). Dzięki GUI konfiguracja i uruchamianie są proste i nie wymagają znajomości długich komend.
 
 ---
 
-## 👤 Autor
+## 🔧 Funkcje
 
-- Twórca GUI: **SP8UEV (Maciek)**
-- Kontakt: [parrotos.desktop@protonmail.com](mailto:parrotos.desktop@protonmail.com)
-- `dsd-fme` nie jest moim dziełem — ja tylko zrobiłem GUI, żeby było łatwiej z tego korzystać.
+- Pełna konfiguracja przez zakładki.
+- Panel stanu z informacjami: TG, ID, CC, sygnał.
+- Historia zdarzeń z eksportem do CSV.
+- Manager nagrywania aktywowanego głosem.
+- Alerty dźwiękowe konfigurowane przez użytkownika.
+- Przeszukiwanie logu i ciemny motyw.
 
 ---
 
-## 🔧 Jak używać?
-Otwórz terminal i zainstaluj PyQt5: 
+## 📦 Jak zainstalować i uruchomić?
 
-pip install PyQt5
+1. **Zainstaluj PyQt5:**
+   ```bash
+   pip install PyQt5
+   ```
 
-Pobierz najnowszą wersję DSD-FME z:
+2. **Pobierz DSD-FME z:**
+   [https://github.com/lwvmobile/dsd-fme](https://github.com/lwvmobile/dsd-fme)
 
-https://github.com/lwvmobile/dsd-fme
+3. **Wypakuj archiwum ZIP.**
 
-...i wypakuj archiwum ZIP.
-Pobierz skrypt GUI:
-DSD-FME-GUI-BY_SP8UEV.py
-Najlepiej umieść go w tym samym folderze, co dsd-fme.exe.
-Otwórz terminal w tym katalogu.
-Uruchom GUI poleceniem: 
+4. **Umieść ten skrypt GUI** w tym samym folderze co `dsd-fme.exe`.
 
-python3 ./DSD-FME-GUI-BY_SP8UEV.py
+5. **Otwórz terminal** w tym folderze i uruchom GUI:
+   ```bash
+   python3 DSD-FME_GUI.py
+   ```
 
 ---
 
 ## 📜 Licencja
 
-- GUI nie zawiera ani nie modyfikuje kodu `dsd-fme`.
-- `dsd-fme` działa na licencji **GPLv2**, dlatego to GUI jest również open-source i można je swobodnie rozwijać i udostępniać (z zachowaniem informacji o autorze i licencji).
+- GUI **nie zawiera** ani nie modyfikuje kodu `dsd-fme`.
+- DSD-FME działa na licencji **GPLv2**, więc to GUI także jest **open-source**.
 
 ---
 
-## 🫶 Wsparcie
+## 👤 Autor
 
-Chcesz pomóc?
-- Prześlij buga
-- Daj feedback
-- A może... podrzuć dobry stream DMR do testów 😄
+- **Twórca GUI:** Kameleon (dawniej SP8UEV)  
+- **Kontakt:** parrotos.desktop@protonmail.com  
+- *Uwaga:* Nie jestem autorem `dsd-fme` – tylko zrobiłem GUI, by korzystanie było prostsze.
 
 ---
 
+## ❤️ Wesprzyj projekt
+
+- Zgłoś błąd 🐞  
+- Zaproponuj nową funkcję 💡  
+- A może... podeślij dobry stream DMR do testów 😄
