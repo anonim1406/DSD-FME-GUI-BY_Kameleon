@@ -45,7 +45,8 @@ Download the latest release of DSD-FME from:
 https://github.com/lwvmobile/dsd-fme
 
 ...then extract the ZIP archive.
-Download this GUI script: DSD-FME-GUI-BY_SP8UEV.py
+Download this GUI script: 
+DSD-FME-GUI-BY_SP8UEV.py
 Place it in the same folder as dsd-fme.exe for best results.
 Open a terminal in that folder.
 Run the GUI: 
@@ -117,7 +118,8 @@ Pobierz najnowszą wersję DSD-FME z:
 https://github.com/lwvmobile/dsd-fme
 
 ...i wypakuj archiwum ZIP.
-Pobierz skrypt GUI: DSD-FME-GUI-BY_SP8UEV.py
+Pobierz skrypt GUI:
+DSD-FME-GUI-BY_SP8UEV.py
 Najlepiej umieść go w tym samym folderze, co dsd-fme.exe.
 Otwórz terminal w tym katalogu.
 Uruchom GUI poleceniem: 
