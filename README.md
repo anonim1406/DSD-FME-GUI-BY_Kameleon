@@ -35,14 +35,22 @@ This GUI is **under active development** and may not yet support every single DS
 
 ---
 
-## 📂 Installation & Usage --> https://github.com/anonim1406/DSD-FME-GUI-BY_SP8UEV/blob/main/Installation%20%26%20Setup%20EN%20%26%20PL
+## 📂 Installation & Usage 
+Open terminal and install PyQt5: 
 
-1. Download `dsd-fme.exe` from its [official GitHub](https://github.com/lwvmobile/dsd-fme).
-2. Run `DSD-FME-GUI-by_SP8UEV.py` using Python 3 with PyQt5 installed.
-3. Select your `dsd-fme.exe` location when prompted.
-4. Adjust your decoding options.
-5. Smash that `START` button.
-6. Watch the magic happen in the terminal view.
+pip install PyQt5
+
+Download the latest release of DSD-FME from:
+
+https://github.com/lwvmobile/dsd-fme
+
+...then extract the ZIP archive.
+Download this GUI script: DSD-FME-GUI-BY_SP8UEV.py
+Place it in the same folder as dsd-fme.exe for best results.
+Open a terminal in that folder.
+Run the GUI: 
+
+python3 ./DSD-FME-GUI-BY_SP8UEV.py
 
 ---
 
@@ -99,14 +107,22 @@ GUI pozwala łatwo ustawiać opcje i uruchamiać `dsd-fme.exe` bez potrzeby wpis
 
 ---
 
-## 🔧 Jak używać? -->https://github.com/anonim1406/DSD-FME-GUI-BY_SP8UEV/blob/main/Installation%20%26%20Setup%20EN%20%26%20PL
+## 🔧 Jak używać?
+Otwórz terminal i zainstaluj PyQt5: 
 
-1. Pobierz `dsd-fme.exe` z oficjalnego GitHuba: https://github.com/lwvmobile/dsd-fme  
-2. Uruchom `DSD-FME-GUI-by_SP8UEV.py` (wymaga Pythona 3 + PyQt5).
-3. Wskaż plik `dsd-fme.exe`.
-4. Ustaw opcje dekodowania.
-5. Kliknij `START`.
-6. Patrz i słuchaj co leci 😉
+pip install PyQt5
+
+Pobierz najnowszą wersję DSD-FME z:
+
+https://github.com/lwvmobile/dsd-fme
+
+...i wypakuj archiwum ZIP.
+Pobierz skrypt GUI: DSD-FME-GUI-BY_SP8UEV.py
+Najlepiej umieść go w tym samym folderze, co dsd-fme.exe.
+Otwórz terminal w tym katalogu.
+Uruchom GUI poleceniem: 
+
+python3 ./DSD-FME-GUI-BY_SP8UEV.py
 
 ---
 
