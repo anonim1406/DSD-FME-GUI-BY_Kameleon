@@ -83,7 +83,7 @@ This is a Python-based GUI frontend for `dsd-fme`, an advanced digital signal de
    python3 DSD-FME-GUI-BY_Kameleon.py
    ```
 
-Or simply launch the `.exe` version if available.
+Or simply launch the `.exe` version, available in Releases.
 
 ---
 
@@ -193,7 +193,7 @@ GUI w Pythonie do `dsd-fme` – dekodera sygnałów cyfrowych (DMR, P25, NXDN, Y
    python3 DSD-FME-GUI-BY_Kameleon.py
    ```
 
-Lub uruchom wersję `.exe`, jeśli ją posiadasz.
+Lub uruchom wersję `.exe`, dostepna do pobrania w Releases.
 
 ---
 
