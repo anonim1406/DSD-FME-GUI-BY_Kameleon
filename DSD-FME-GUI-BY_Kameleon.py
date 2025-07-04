@@ -1,8 +1,6 @@
 import sys
 import os
 
-# --- DIAGNOSTIC BLOCK (ENGLISH) ---
-# This section will check each library individually and tell us which one is missing.
 def import_or_fail(module_name, package_name=None):
     if package_name is None: package_name = module_name
     try:
@@ -23,7 +21,7 @@ print("--- Checking dependencies ---")
 import_or_fail("numpy")
 import_or_fail("pyqtgraph")
 import_or_fail("sounddevice")
-import_or_fail("cffi") # 
+import_or_fail("cffi") 
 import_or_fail("scipy")
 print("--- All dependencies found. Starting application... ---")
 
@@ -54,7 +52,7 @@ except ImportError:
     WINSOUND_AVAILABLE = False
 
 
-
+# --- Konfiguracja ---
 CONFIG_FILE = 'dsd-fme-gui-config.json'
 UDP_IP = "127.0.0.1"
 UDP_PORT = 23456
@@ -65,7 +63,7 @@ MAX_DB = 50
 AUDIO_RATE = 16000
 AUDIO_DTYPE = np.int16
 
-
+# --- Klasa do odczytu logów DSD-FME ---
 class ProcessReader(QObject):
     line_read = pyqtSignal(str)
     finished = pyqtSignal()
@@ -77,6 +75,7 @@ class ProcessReader(QObject):
             for line in iter(self.process.stdout.readline, ''): self.line_read.emit(line)
         self.finished.emit()
 
+# --- Klasa do nasłuchu audio UDP ---
 class UdpListener(QObject):
     data_ready = pyqtSignal(bytes)
     def __init__(self, ip, port):
@@ -95,7 +94,7 @@ class UdpListener(QObject):
             except socket.timeout: continue
         sock.close()
 
-
+# --- Funkcja do ustawiania ciemnego motywu ---
 def set_dark_theme(app):
     app.setStyle("Fusion")
     p = QPalette(); p.setColor(QPalette.Window, QColor(35, 35, 35)); p.setColor(QPalette.WindowText, Qt.white)
@@ -114,7 +113,7 @@ class NumericTableWidgetItem(QTableWidgetItem):
         except ValueError:
             return super().__lt__(other)
 
-
+# --- Główna klasa aplikacji ---
 class DSDApp(QMainWindow):
     def __init__(self):
         super().__init__()
