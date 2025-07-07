@@ -84,6 +84,7 @@ This is a Python-based GUI frontend for `dsd-fme`, an advanced digital signal de
    ```
 
 Or simply launch the `.exe` version, available in Releases.
+https://github.com/anonim1406/DSD-FME-GUI-BY_Kameleon/releases/tag/DSD-FME-GUI-BY-Kameleon-Installer
 
 ---
 
@@ -142,6 +143,7 @@ Or simply launch the `.exe` version, available in Releases.
 ### 📦 Wersja .exe
 
 Projekt dostępny jako niezależny plik **.exe** — nie wymaga uruchamiania przez Pythona.
+https://github.com/anonim1406/DSD-FME-GUI-BY_Kameleon/releases/tag/DSD-FME-GUI-BY-Kameleon-Installer
 
 ---
 
