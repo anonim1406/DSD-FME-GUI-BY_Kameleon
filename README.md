@@ -1,221 +1,157 @@
+# 🎛️ DSD-FME GUI by Kameleon v2.2
 
-# DSD-FME GUI by Kameleon – Version 1.0
+> ⚠️ **IMPORTANT NOTICE:**  
+> I am **not the author** of DSD-FME. This GUI is only a graphical frontend that works on top of it. All credit for the decoder itself goes to the original creators of DSD and DSD-FME.
 
-*A modern, feature-rich graphical interface for the powerful DSD-FME digital voice decoder – built for people, not just terminals.*
+> ⚠️ **FIRST RUN INSTRUCTIONS:**  
+> Please **run the app as Administrator** the first time you launch it.  
+> If you're using the installer, you may need to **temporarily disable your antivirus** to avoid false positives.
 
----
+> ⚠️ **Note:** This project is still under active development. Some features might not work yet or could behave unpredictably.
 
-## 🚀 What's New in v1.0
-
-### 🎧 Integrated "Audio Analysis" Tab
-
-- **Real-time Spectrogram:** Military-styled, high-performance audio spectrum display.
-- **Oscilloscope:** Live waveform visualization.
-- **Live Signal Meters:** RMS signal strength and dominant frequency (Peak Freq).
-- **Audio Output Control:** Select output device, control volume, and mute directly from the GUI.
-- **Built-in Filters:** Adjustable Low-pass and High-pass filters to clean up the signal.
-
-### 📓 Advanced "Logbook"
-
-- **New Logbook Tab:** Replaces the basic event table with a more powerful logger.
-- **Sortable Columns:** Sort entries by Time, TG, or ID.
-- **Searchable Entries:** Real-time filtering/search.
-- **Import/Export:** Load and save logs to/from CSV files.
-
-### 🛠 Additional Tools
-
-- **Recorder Tab:** Manage the built-in voice-activated recorder from DSD-FME.
-- **Alerts Tab:** Configure custom two-tone sound alerts for specific TGs or Radio IDs.
-- **Mini-Oscilloscope in Main Panel:** Quick signal preview in the config tab.
-- **Log Search Function:** Search live output logs with ease.
-
-### 📦 .exe Application
-
-The entire project is bundled into a standalone **.exe** executable – no need to run from Python. Just double-click and go!
+> ✅ **Good news:** The **latest installer includes the required `dsd-fme.exe` files** – you don’t need to download them separately.
 
 ---
 
-## ⚠️ Requirements
+DSD-FME GUI by Kameleon is a modern graphical interface for the powerful DSD-FME digital voice decoder. No more terminal commands – just configure, monitor, analyze, and archive transmissions in an intuitive environment.
 
-Before running the script version, install dependencies:
+## 🚀 Features
 
-```bash
-pip install PyQt5 numpy pyqtgraph sounddevice scipy
-```
+- **Complete GUI Configuration:** All DSD-FME options available via interactive tabs and toggles.
+- **Real-Time Signal Analysis:**
+  - Audio Spectrogram
+  - Oscilloscope
+  - Signal Meters (RMS & Peak Frequency)
+- **Advanced Logbook:**
+  - Records every transmission with timestamps
+  - Add your own notes and tags
+  - Filter by date or text, sort by columns
+  - Export/import to `.csv`
+- **Live Map Integration:**
+  - Based on OpenStreetMap
+  - Auto-markers using LRRP/GPS data
+  - Dark theme consistent with the GUI
+- **Alias System:** Rename Talkgroups and Radio IDs for easier identification.
+- **Stats & Charts:** Activity graphs based on logbook data.
+- **Recording Manager:** Automatically records detected transmissions.
+- **Custom Alerts:** Set `.wav` alerts for specific TGs or Radio IDs.
+- **Theme Options:** Light/dark themes included for user comfort.
 
----
+## 📋 Requirements
 
-## 🧠 What Is This?
+### Compiled Version (.exe)
+- Windows 64-bit
+- ✅ Includes `dsd-fme.exe`
 
-This is a Python-based GUI frontend for `dsd-fme`, an advanced digital signal decoder (DMR, P25, NXDN, YSF, etc.). It simplifies usage by offering graphical configuration instead of long command-line arguments.
+### Script Version (.py)
+- Python 3.x
+- Required packages:
+  ```bash
+  pip install PyQt5 numpy pyqtgraph sounddevice scipy folium PyQtWebEngine
+  ```
+- `dsd-fme.exe` must be in the same folder or configured in settings.
 
----
+## 🛠️ Installation
 
-## 🔧 Features
+### Recommended (Installer)
+1. Download the latest `DSD-FME-GUI_v2.2_Installer.exe` from the [Releases](https://github.com/).
+2. Temporarily **disable antivirus** during installation.
+3. Run the installer and follow the steps.
+4. **Right-click and run as Administrator** on first launch.
+5. Start decoding! `dsd-fme.exe` is already included.
 
-- Full tab-based configuration GUI.
-- Real-time spectrum and oscilloscope.
-- Logbook with CSV support and dynamic search.
-- Voice-activated recorder manager.
-- Customizable alerts.
-- Audio filters (Low-pass, High-pass).
-- Mini-signal display and log terminal search.
-- Dark theme UI.
-
----
-
-## 📦 How to Install & Run
-
-1. **Install dependencies:**
+### Manual (Python Script)
+1. Install dependencies as shown above.
+2. Place `DSD-FME-GUI-BY_Kameleon.py` and `dsd-fme.exe` in the same folder.
+3. Run:
    ```bash
-   pip install PyQt5 numpy pyqtgraph sounddevice scipy
+   python DSD-FME-GUI-BY_Kameleon.py
    ```
-
-2. **Download DSD-FME:**
-   [https://github.com/lwvmobile/dsd-fme](https://github.com/lwvmobile/dsd-fme)
-
-3. **Extract the ZIP archive.**
-
-4. **Place the GUI script** (`DSD-FME-GUI-BY_Kameleon.py`) in the same folder as `dsd-fme.exe`.
-
-5. **Open terminal in that folder** and run:
-   ```bash
-   python3 DSD-FME-GUI-BY_Kameleon.py
-   ```
-
-Or simply launch the `.exe` version, available in Releases.
-https://github.com/anonim1406/DSD-FME-GUI-BY_Kameleon/releases/tag/DSD-FME-GUI-BY-Kameleon-Installer
-
----
 
 ## 📜 License
 
-- This GUI **does not include** or modify the `dsd-fme` code.
-- DSD-FME is licensed under **GPLv2**, so this GUI is also open-source.
+- **DSD-FME Core:** ISC + GNU GPLv2
+- **GUI Interface:** GNU General Public License, Version 2 (GPLv2)
+
+## 🏆 Credits
+
+Huge thanks to **lwvmobile** and the entire community behind DSD and DSD-FME. Without their work, this frontend wouldn’t exist.
 
 ---
 
-## 👤 Author
+# 🎛️ DSD-FME GUI by Kameleon v2.2 (PL)
 
-- **GUI Developer:** Kameleon   
-- **Contact:** parrotos.desktop@protonmail.com
+> ⚠️ **WAŻNE:**  
+> Nie jestem autorem DSD-FME – stworzyłem tylko graficzną nakładkę na ten dekoder. Cała zasługa należy do twórców oryginalnego DSD i DSD-FME.
 
----
+> ⚠️ **PIERWSZE URUCHOMIENIE:**  
+> **Uruchom aplikację jako Administrator** przy pierwszym starcie.  
+> Jeśli używasz instalatora – **tymczasowo wyłącz antywirusa**, aby uniknąć problemów z uruchomieniem.
 
-## ❤️ Want to Help?
+> ⚠️ **Projekt w budowie:** Niektóre funkcje mogą jeszcze nie działać lub być testowane.
 
-- Report a bug 🐞  
-- Suggest a feature 💡  
-- Or... send a good DMR stream for testing 😄
-
----
-
-# 🇵🇱 DSD-FME GUI by Kameleon – Wersja 1.0
-
-*Nowoczesny, rozbudowany interfejs graficzny do potężnego dekodera DSD-FME — zaprojektowany z myślą o użytkowniku, nie tylko terminalu.*
+> ✅ **Dobra wiadomość:** Najnowszy instalator **zawiera pliki `dsd-fme.exe`**, więc nie trzeba ich szukać osobno.
 
 ---
 
-## 🚀 Co nowego w wersji 1.0
+DSD-FME GUI by Kameleon to zaawansowany interfejs graficzny dla dekodera mowy cyfrowej DSD-FME. Umożliwia łatwą konfigurację i analizę sygnału bez znajomości terminala.
 
-### 🎧 Zintegrowana zakładka "Audio Analysis"
+## 🚀 Główne Funkcje
 
-- **Spektrogram czasu rzeczywistego:** Stylizowany na „militarny” analizator widma.
-- **Oscyloskop:** Podgląd fali dźwiękowej na żywo.
-- **Mierniki RMS i Peak Freq:** Pomiar siły sygnału i dominującej częstotliwości.
-- **Regulacja audio:** Wybór wyjścia, kontrola głośności i wyciszenie.
-- **Filtry audio:** Filtry dolno- i górnoprzepustowe z regulacją częstotliwości odcięcia.
+- **Pełna konfiguracja przez GUI** – wszystkie opcje DSD-FME dostępne przez zakładki.
+- **Analiza sygnału na żywo:**
+  - Spektrogram
+  - Oscyloskop
+  - Mierniki RMS i częstotliwości
+- **Logbook (dziennik transmisji):**
+  - Czas rozpoczęcia i zakończenia każdej transmisji
+  - Możliwość dodawania notatek i tagów
+  - Filtrowanie, sortowanie, eksport/import `.csv`
+- **Widok Mapy:**
+  - OpenStreetMap w ciemnym motywie
+  - Automatyczne znaczniki z GPS/LRRP
+- **Aliasowanie:** Własne nazwy dla Talkgroupów i Radio ID
+- **Statystyki i wykresy:** Najaktywniejsze grupy i użytkownicy
+- **Menedżer nagrań:** Nagrywanie po wykryciu transmisji
+- **Alerty dźwiękowe:** Obsługa plików `.wav` dla wybranych TG/ID
+- **Personalizacja interfejsu:** Ciemne i jasne motywy do wyboru
 
-### 📓 Zaawansowany "Logbook"
+## 📋 Wymagania
 
-- **Nowa zakładka logbook:** Zastępuje prostą listę zdarzeń.
-- **Sortowanie kolumn:** Po czasie, TG i ID.
-- **Wyszukiwanie:** Dynamiczne filtrowanie wpisów.
-- **Import/Eksport CSV:** Zapis i wczytywanie historii transmisji.
+### Wersja .exe
+- Windows 64-bit
+- ✅ `dsd-fme.exe` dołączony
 
-### 🛠 Narzędzia Dodatkowe
+### Wersja skryptowa (.py)
+- Python 3.x
+- Wymagane biblioteki:
+  ```bash
+  pip install PyQt5 numpy pyqtgraph sounddevice scipy folium PyQtWebEngine
+  ```
+- Plik `dsd-fme.exe` w tym samym folderze lub ustawiony w konfiguracji.
 
-- **Zakładka "Recorder":** Łatwe zarządzanie funkcją nagrywania.
-- **Zakładka "Alerts":** Dwutonowe alerty dźwiękowe dla TG i ID.
-- **Mini-oscyloskop:** Szybki podgląd sygnału.
-- **Wyszukiwarka logów:** Szukanie w danych wyjściowych terminala.
+## 🛠️ Instalacja
 
-### 📦 Wersja .exe
+### Instalator (zalecany)
+1. Pobierz `DSD-FME-GUI_v2.2_Installer.exe` z sekcji [Releases](https://github.com/).
+2. Tymczasowo **wyłącz antywirusa**.
+3. Uruchom instalator i zainstaluj program.
+4. Przy pierwszym starcie – **uruchom jako Administrator**.
+5. Gotowe! Wszystko jest już na miejscu, w tym `dsd-fme.exe`.
 
-Projekt dostępny jako niezależny plik **.exe** — nie wymaga uruchamiania przez Pythona.
-https://github.com/anonim1406/DSD-FME-GUI-BY_Kameleon/releases/tag/DSD-FME-GUI-BY-Kameleon-Installer
-
----
-
-## ⚠️ Wymagania
-
-Przed uruchomieniem wersji skryptowej zainstaluj zależności:
-
-```bash
-pip install PyQt5 numpy pyqtgraph sounddevice scipy
-```
-
----
-
-## 🧠 Co to jest?
-
-GUI w Pythonie do `dsd-fme` – dekodera sygnałów cyfrowych (DMR, P25, NXDN, YSF itd.). Dzięki interfejsowi graficznemu nie musisz wpisywać długich komend ręcznie.
-
----
-
-## 🔧 Funkcje
-
-- Konfiguracja przez zakładki.
-- Spektrogram i oscyloskop.
-- Logbook z CSV i wyszukiwaniem.
-- Nagrywanie aktywowane głosem.
-- Alerty dźwiękowe.
-- Filtry audio.
-- Mini-podgląd sygnału i terminal.
-- Ciemny motyw.
-
----
-
-## 📦 Instalacja i uruchamianie
-
-1. **Zainstaluj zależności:**
+### Skrypt Python
+1. Zainstaluj wymagane biblioteki.
+2. Umieść `DSD-FME-GUI-BY_Kameleon.py` oraz `dsd-fme.exe` w tym samym katalogu.
+3. Uruchom w terminalu:
    ```bash
-   pip install PyQt5 numpy pyqtgraph sounddevice scipy
+   python DSD-FME-GUI-BY_Kameleon.py
    ```
-
-2. **Pobierz DSD-FME:**
-   [https://github.com/lwvmobile/dsd-fme](https://github.com/lwvmobile/dsd-fme)
-
-3. **Wypakuj archiwum ZIP.**
-
-4. **Umieść skrypt GUI** (`DSD-FME-GUI-BY_Kameleon.py`) w tym samym folderze co `dsd-fme.exe`.
-
-5. **Otwórz terminal w tym folderze** i uruchom:
-   ```bash
-   python3 DSD-FME-GUI-BY_Kameleon.py
-   ```
-
-Lub uruchom wersję `.exe`, dostepna do pobrania w Releases.
-
----
 
 ## 📜 Licencja
 
-GUI **nie zawiera** ani nie modyfikuje kodu `dsd-fme`.
+- **DSD-FME:** licencje ISC oraz GNU GPLv2
+- **GUI:** na licencji GNU GPLv2 (wolne oprogramowanie)
 
-`dsd-fme` działa na licencji **GPLv2**, więc GUI również jest **open-source**.
+## 🏆 Podziękowania
 
----
-
-## 👤 Autor
-
-- **Autor GUI:** Kameleon  
-- **Kontakt:** parrotos.desktop@protonmail.com
-
----
-
-## ❤️ Wsparcie
-
-- Zgłoś błąd 🐞  
-- Zaproponuj nową funkcję 💡  
-- A może... podeślij dobry stream DMR do testów 😄
+Ogromne dzięki dla **lwvmobile** i wszystkich kontrybutorów DSD i DSD-FME. Bez ich dekodera ta nakładka by nie powstała 🙌
