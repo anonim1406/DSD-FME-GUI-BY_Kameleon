@@ -70,12 +70,6 @@ try:
     RTLSDR_AVAILABLE = True
 except ImportError:
     RTLSDR_AVAILABLE = False
-    
-try:
-    from rnn_wrapper import RNNoise
-    RNN_AVAILABLE = True
-except ImportError:
-    RNN_AVAILABLE = False
 
 CONFIG_FILE = resource_path('dsd-fme-gui-config.json')
 ALIASES_FILE = resource_path('dsd-fme-aliases.json')
@@ -90,7 +84,6 @@ class IntegerAxis(AxisItem):
     def tickStrings(self, values, scale, spacing):
         return [f'{int(v)}' for v in values]
 
-# --- ZMIANA 1: Nowe okno dla filtrów i EQ ---
 class AudioProcessingWindow(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -111,7 +104,6 @@ class AudioProcessingWindow(QDialog):
         container_layout.addWidget(self._create_standard_filters_group())
         container_layout.addWidget(self._create_advanced_filters_group())
 
-        # Przyciski na dole
         button_layout = QHBoxLayout()
         close_button = QPushButton("Close")
         close_button.clicked.connect(self.accept)
@@ -120,13 +112,13 @@ class AudioProcessingWindow(QDialog):
         main_layout.addLayout(button_layout)
 
     def _create_equalizer_group(self):
-        group = QGroupBox("8-Band Equalizer")
+        group = QGroupBox("6-Band Equalizer")
         main_layout = QVBoxLayout(group)
         
         eq_layout = QHBoxLayout()
         self.main_app.eq_sliders = []
         self.main_app.eq_labels = []
-        eq_bands = [60, 170, 310, 600, 1000, 3000, 6000]
+        eq_bands = [100, 300, 600, 1000, 3000, 6000]
 
         for i, freq in enumerate(eq_bands):
             slider_v_layout = QVBoxLayout()
@@ -134,10 +126,10 @@ class AudioProcessingWindow(QDialog):
             label.setAlignment(Qt.AlignCenter)
             
             slider = QSlider(Qt.Vertical)
-            slider.setRange(-15, 15)
+            slider.setRange(-4, 4)
             slider.setValue(0)
             slider.setTickPosition(QSlider.TicksBothSides)
-            slider.setTickInterval(5)
+            slider.setTickInterval(2)
             self.main_app._add_widget(f'eq_band_{i}', slider)
             
             slider_v_layout.addWidget(label)
@@ -146,15 +138,10 @@ class AudioProcessingWindow(QDialog):
             self.main_app.eq_sliders.append(slider)
         main_layout.addLayout(eq_layout)
         
-        # --- ZMIANA 2: Przyciski Reset i Auto ---
         btn_layout = QHBoxLayout()
         reset_btn = QPushButton("Reset to Default")
         reset_btn.clicked.connect(self.reset_equalizer)
-        auto_btn = QPushButton("Auto")
-        auto_btn.setToolTip("Currently resets to default. Future AI implementation planned.")
-        auto_btn.clicked.connect(self.reset_equalizer) # Placeholder
         btn_layout.addStretch()
-        btn_layout.addWidget(auto_btn)
         btn_layout.addWidget(reset_btn)
         main_layout.addLayout(btn_layout)
         
@@ -180,11 +167,7 @@ class AudioProcessingWindow(QDialog):
         btn_layout = QHBoxLayout()
         reset_btn = QPushButton("Reset to Default")
         reset_btn.clicked.connect(self.reset_standard_filters)
-        auto_btn = QPushButton("Auto")
-        auto_btn.setToolTip("Currently resets to default. Future AI implementation planned.")
-        auto_btn.clicked.connect(self.reset_standard_filters) # Placeholder
         btn_layout.addStretch()
-        btn_layout.addWidget(auto_btn)
         btn_layout.addWidget(reset_btn)
         main_layout.addLayout(btn_layout)
         
@@ -203,21 +186,12 @@ class AudioProcessingWindow(QDialog):
         l2.addWidget(QLabel("Strength:"), 1, 1)
         l2.addWidget(self.main_app._add_widget("nr_strength_slider", QSlider(Qt.Horizontal), {'range': (0, 100), 'value': 50}), 1, 2)
         
-        self.main_app.rnnoise_check = self.main_app._add_widget("rnnoise_check", QCheckBox("RNNoise Denoising (AI based)"))
-        if not RNN_AVAILABLE:
-            self.main_app.rnnoise_check.setToolTip("RNNoise library not found. Please install 'rnn_wrapper'.")
-            self.main_app.rnnoise_check.setEnabled(False)
-        l2.addWidget(self.main_app.rnnoise_check, 2, 0, 1, 3)
         main_layout.addLayout(l2)
 
         btn_layout = QHBoxLayout()
         reset_btn = QPushButton("Reset to Default")
         reset_btn.clicked.connect(self.reset_advanced_filters)
-        auto_btn = QPushButton("Auto")
-        auto_btn.setToolTip("Currently resets to default. Future AI implementation planned.")
-        auto_btn.clicked.connect(self.reset_advanced_filters) # Placeholder
         btn_layout.addStretch()
-        btn_layout.addWidget(auto_btn)
         btn_layout.addWidget(reset_btn)
         main_layout.addLayout(btn_layout)
 
@@ -243,12 +217,9 @@ class AudioProcessingWindow(QDialog):
     def reset_advanced_filters(self):
         self.main_app.widgets['agc_check'].setChecked(False)
         self.main_app.widgets['nr_check'].setChecked(False)
-        self.main_app.widgets['rnnoise_check'].setChecked(False)
-        
         self.main_app.widgets['agc_strength_slider'].setValue(50)
         self.main_app.widgets['nr_strength_slider'].setValue(50)
         
-
 class ProcessReader(QObject):
     line_read = pyqtSignal(str); finished = pyqtSignal()
     def __init__(self, process): super().__init__(); self.process = process
@@ -290,17 +261,14 @@ class DSDApp(QMainWindow):
         self.is_in_transmission = False; self.alerts = []; self.recording_dir = ""
         self.is_recording = False; self.wav_file = None; self.is_resetting = False
         self.transmission_log = {}; self.last_logged_id = None
-        self.output_stream = None; self.volume = 0.7
+        self.output_stream = None; self.volume = 1.0
         self.filter_states = {}
         self.aliases = {'tg': {}, 'id': {}}
         self.current_tg = None; self.current_id = None; self.current_cc = None
         self.fs_watcher = QFileSystemWatcher(); self.fs_watcher.directoryChanged.connect(self.update_recording_list)
         self.lrrp_watcher = QFileSystemWatcher()
         self.lrrp_watcher.fileChanged.connect(self.update_map_from_lrrp)
-        
-        self.rnnoise_denoiser = RNNoise() if RNN_AVAILABLE else None
 
-        # --- ZMIANA 3: Zmiana tytułu ---
         self.setWindowTitle("DSD-FME-GUI-BY Kameleon v3.0")
         self.setGeometry(100, 100, 1600, 950)
         
@@ -324,7 +292,6 @@ class DSDApp(QMainWindow):
         else: 
             QTimer.singleShot(100, self.close)
     
-    # --- ZMIANA 4: Poprawki motywów ---
     def _create_theme_manager(self):
         self.themes = {
             "Default (Kameleon Dark)": { "palette": self._get_dark_palette, "stylesheet": self._get_dark_stylesheet, "pg_background": "#15191c", "pg_foreground": "#e0e0e0", "spec_colormap": "Amber Alert" },
@@ -366,35 +333,35 @@ class DSDApp(QMainWindow):
         """
     def _get_matrix_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#020f03")); p.setColor(QPalette.WindowText, QColor("#00ff41")); p.setColor(QPalette.Base, QColor("#051803")); p.setColor(QPalette.AlternateBase, QColor("#0a2808")); p.setColor(QPalette.Text, QColor("#33ff77")); p.setColor(QPalette.Button, QColor("#0a2808")); p.setColor(QPalette.ButtonText, QColor("#00ff41")); p.setColor(QPalette.Highlight, QColor("#00ff41")); p.setColor(QPalette.HighlightedText, Qt.black); p.setColor(QPalette.Link, QColor("#66ff99")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
-    def _get_matrix_stylesheet(self): return "QWidget{font-family: 'Courier New', monospace; color:#00ff41; background-color:#020f03;} QGroupBox{border:1px solid #00ff41; background-color:#051803;} QGroupBox::title{background-color:#020f03;} QPushButton{border:1px solid #00ff41; background-color:#103010;} QPushButton:hover{background-color:#205020;} QTabBar::tab:selected{border:1px solid #00ff41; background:#205020;} QSlider::handle:horizontal{background:#00ff41;}"
+    def _get_matrix_stylesheet(self): return "QWidget{font-family:'Courier New',monospace;color:#00ff41;background-color:#020f03;}QGroupBox{border:1px solid #00ff41;background-color:#051803;}QGroupBox::title{background-color:#020f03;}QPushButton{border:1px solid #00ff41;background-color:#103010;}QPushButton:hover{background-color:#205020;}QTabBar::tab{padding:8px;border:1px solid #008000;border-bottom:none;background:#051803;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#205020;border-color:#00ff41;}QTabBar::tab:!selected:hover{background:#104010;}QSlider::handle:horizontal{background:#00ff41;}"
     
     def _get_cyberpunk_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#0c0c28")); p.setColor(QPalette.WindowText, QColor("#f7f722")); p.setColor(QPalette.Base, QColor("#141434")); p.setColor(QPalette.AlternateBase, QColor("#222248")); p.setColor(QPalette.Text, QColor("#ffffff")); p.setColor(QPalette.Button, QColor("#141434")); p.setColor(QPalette.ButtonText, QColor("#f7f722")); p.setColor(QPalette.Highlight, QColor("#f7f722")); p.setColor(QPalette.HighlightedText, QColor("#0c0c28")); p.setColor(QPalette.Link, QColor("#ff00ff")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
-    def _get_cyberpunk_stylesheet(self): return "QWidget{color:#f7f722; background-color:#0c0c28;} QGroupBox{border:1px solid #ff00ff; background-color:#141434;} QGroupBox::title{background-color:#0c0c28;} QPushButton{border:1px solid #ff00ff; background-color:#202050;} QPushButton:hover{background-color:#303070;} QTabBar::tab:selected{border:1px solid #f7f722; background:#303070;} QSlider::handle:horizontal{background:#f7f722;}"
+    def _get_cyberpunk_stylesheet(self): return "QWidget{color:#f7f722;background-color:#0c0c28;}QGroupBox{border:1px solid #ff00ff;background-color:#141434;}QGroupBox::title{background-color:#0c0c28;}QPushButton{border:1px solid #ff00ff;background-color:#202050;}QPushButton:hover{background-color:#303070;}QTabBar::tab{padding:8px;border:1px solid #ff00ff;border-bottom:none;background:#141434;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#303070;border-color:#f7f722;}QTabBar::tab:!selected:hover{background:#303070;}QSlider::handle:horizontal{background:#f7f722;}"
     
     def _get_neon_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#101018")); p.setColor(QPalette.WindowText, QColor("#f000ff")); p.setColor(QPalette.Base, QColor("#181828")); p.setColor(QPalette.AlternateBase, QColor("#202030")); p.setColor(QPalette.Text, QColor("#00ffff")); p.setColor(QPalette.Button, QColor("#202030")); p.setColor(QPalette.ButtonText, QColor("#f000ff")); p.setColor(QPalette.Highlight, QColor("#f000ff")); p.setColor(QPalette.HighlightedText, Qt.black); p.setColor(QPalette.Link, QColor("#00ffff")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
-    def _get_neon_stylesheet(self): return "QWidget{color:#00ffff; background-color:#101018;} QGroupBox{border:1px solid #f000ff; background-color:#181828;} QGroupBox::title{background-color:#101018;} QPushButton{border:1px solid #f000ff; background-color:#251530;} QPushButton:hover{background-color:#352040;} QTabBar::tab:selected{border:1px solid #00ffff; background:#251530;} QSlider::handle:horizontal{background:#00ffff;}"
+    def _get_neon_stylesheet(self): return "QWidget{color:#00ffff;background-color:#101018;}QGroupBox{border:1px solid #f000ff;background-color:#181828;}QGroupBox::title{background-color:#101018;}QPushButton{border:1px solid #f000ff;background-color:#251530;}QPushButton:hover{background-color:#352040;}QTabBar::tab{padding:8px;border:1px solid #f000ff;border-bottom:none;background:#181828;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#251530;border-color:#00ffff;}QTabBar::tab:!selected:hover{background:#352040;}QSlider::handle:horizontal{background:#00ffff;}"
 
     def _get_retro_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#212121")); p.setColor(QPalette.WindowText, QColor("#eeeeee")); p.setColor(QPalette.Base, QColor("#303030")); p.setColor(QPalette.AlternateBase, QColor("#424242")); p.setColor(QPalette.Text, QColor("#eeeeee")); p.setColor(QPalette.Button, QColor("#424242")); p.setColor(QPalette.ButtonText, QColor("#eeeeee")); p.setColor(QPalette.Highlight, QColor("#ff5722")); p.setColor(QPalette.HighlightedText, QColor("#212121")); p.setColor(QPalette.Link, QColor("#ffc107")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
-    def _get_retro_stylesheet(self): return "QWidget{font-family: 'Press Start 2P', cursive; color:#eeeeee; background-color:#212121;} QGroupBox{border:1px solid #ff5722; background-color:#303030;} QGroupBox::title{background-color:#212121;} QPushButton{border:1px solid #ffc107; background-color:#424242;} QTabBar::tab:selected{border:1px solid #ff5722;} QSlider::handle:horizontal{background:#ffc107;}"
+    def _get_retro_stylesheet(self): return "QWidget{font-family:'Press Start 2P',cursive;color:#eeeeee;background-color:#212121;}QGroupBox{border:1px solid #ff5722;background-color:#303030;}QGroupBox::title{background-color:#212121;}QPushButton{border:1px solid #ffc107;background-color:#424242;}QTabBar::tab{padding:8px;border:1px solid #ffc107;border-bottom:none;background:#303030;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#424242;border-color:#ff5722;}QTabBar::tab:!selected:hover{background:#505050;}QSlider::handle:horizontal{background:#ffc107;}"
 
     def _get_military_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#1a2418")); p.setColor(QPalette.WindowText, QColor("#a2b59f")); p.setColor(QPalette.Base, QColor("#253522")); p.setColor(QPalette.AlternateBase, QColor("#354831")); p.setColor(QPalette.Text, QColor("#c2d0bd")); p.setColor(QPalette.Button, QColor("#354831")); p.setColor(QPalette.ButtonText, QColor("#a2b59f")); p.setColor(QPalette.Highlight, QColor("#849b80")); p.setColor(QPalette.HighlightedText, QColor("#1a2418")); p.setColor(QPalette.Link, QColor("#c2d0bd")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
-    def _get_military_stylesheet(self): return "QWidget{color:#a2b59f; background-color:#1a2418;} QGroupBox{border:1px solid #4a5e46; background-color:#253522;} QGroupBox::title{background-color:#1a2418;} QPushButton{border:1px solid #667b62; background-color:#354831;} QTabBar::tab:selected{border:1px solid #849b80;} QSlider::handle:horizontal{background:#849b80;}"
+    def _get_military_stylesheet(self): return "QWidget{color:#a2b59f;background-color:#1a2418;}QGroupBox{border:1px solid #4a5e46;background-color:#253522;}QGroupBox::title{background-color:#1a2418;}QPushButton{border:1px solid #667b62;background-color:#354831;}QTabBar::tab{padding:8px;border:1px solid #4a5e46;border-bottom:none;background:#253522;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#354831;border-color:#849b80;}QTabBar::tab:!selected:hover{background:#354831;}QSlider::handle:horizontal{background:#849b80;}"
     
     def _get_arctic_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#e8eef2")); p.setColor(QPalette.WindowText, QColor("#1c2e4a")); p.setColor(QPalette.Base, QColor("#fdfdfe")); p.setColor(QPalette.AlternateBase, QColor("#dce4ea")); p.setColor(QPalette.Text, QColor("#2c3e50")); p.setColor(QPalette.Button, QColor("#dce4ea")); p.setColor(QPalette.ButtonText, QColor("#1c2e4a")); p.setColor(QPalette.Highlight, QColor("#3498db")); p.setColor(QPalette.HighlightedText, Qt.white); p.setColor(QPalette.Link, QColor("#2980b9")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
-    def _get_arctic_stylesheet(self): return "QWidget{color:#2c3e50; background-color:#e8eef2;} QGroupBox{border:1px solid #bdc3c7; background-color:#f8f9fa;} QGroupBox::title{background-color:#e8eef2;} QPushButton{border:1px solid #bdc3c7; background-color:#ecf0f1;} QTabBar::tab:selected{border:1px solid #3498db; background:white;} QSlider::handle:horizontal{background:#3498db;}"
+    def _get_arctic_stylesheet(self): return "QWidget{color:#2c3e50;background-color:#e8eef2;}QGroupBox{border:1px solid #bdc3c7;background-color:#f8f9fa;}QGroupBox::title{background-color:#e8eef2;}QPushButton{border:1px solid #bdc3c7;background-color:#ecf0f1;}QTabBar::tab{padding:8px;border:1px solid #bdc3c7;border-bottom:none;background:#ecf0f1;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:white;border-color:#3498db;}QTabBar::tab:!selected:hover{background:#f0f5f9;}QSlider::handle:horizontal{background:#3498db;}"
 
     def _get_solarized_dark_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#002b36")); p.setColor(QPalette.WindowText, QColor("#839496")); p.setColor(QPalette.Base, QColor("#073642")); p.setColor(QPalette.AlternateBase, QColor("#002b36")); p.setColor(QPalette.Text, QColor("#839496")); p.setColor(QPalette.Button, QColor("#073642")); p.setColor(QPalette.ButtonText, QColor("#839496")); p.setColor(QPalette.Highlight, QColor("#268bd2")); p.setColor(QPalette.HighlightedText, QColor("#002b36")); p.setColor(QPalette.Link, QColor("#2aa198")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
-    def _get_solarized_dark_stylesheet(self): return "QWidget{color:#839496; background-color:#002b36;} QGroupBox{border:1px solid #586e75; background-color:#073642;} QGroupBox::title{background-color:#002b36;} QPushButton{border:1px solid #586e75; background-color:#073642;} QTabBar::tab:selected{border:1px solid #268bd2;} QSlider::handle:horizontal{background:#268bd2;}"
+    def _get_solarized_dark_stylesheet(self): return "QWidget{color:#839496;background-color:#002b36;}QGroupBox{border:1px solid #586e75;background-color:#073642;}QGroupBox::title{background-color:#002b36;}QPushButton{border:1px solid #586e75;background-color:#073642;}QTabBar::tab{padding:8px;border:1px solid #586e75;border-bottom:none;background:#073642;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#002b36;border-color:#268bd2;}QTabBar::tab:!selected:hover{background:#08404f;}QSlider::handle:horizontal{background:#268bd2;}"
 
     def _get_dracula_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#282a36")); p.setColor(QPalette.WindowText, QColor("#f8f8f2")); p.setColor(QPalette.Base, QColor("#1e1f29")); p.setColor(QPalette.AlternateBase, QColor("#44475a")); p.setColor(QPalette.Text, QColor("#f8f8f2")); p.setColor(QPalette.Button, QColor("#44475a")); p.setColor(QPalette.ButtonText, QColor("#f8f8f2")); p.setColor(QPalette.Highlight, QColor("#bd93f9")); p.setColor(QPalette.HighlightedText, QColor("#282a36")); p.setColor(QPalette.Link, QColor("#8be9fd")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
-    def _get_dracula_stylesheet(self): return "QWidget{color:#f8f8f2; background-color:#282a36;} QGroupBox{border:1px solid #bd93f9; background-color:#1e1f29;} QGroupBox::title{background:#282a36;} QPushButton{border:1px solid #6272a4; background-color:#44475a;} QTabBar::tab:selected{border:1px solid #bd93f9;} QSlider::handle:horizontal{background:#bd93f9;}"
+    def _get_dracula_stylesheet(self): return "QWidget{color:#f8f8f2;background-color:#282a36;}QGroupBox{border:1px solid #bd93f9;background-color:#1e1f29;}QGroupBox::title{background:#282a36;}QPushButton{border:1px solid #6272a4;background-color:#44475a;}QTabBar::tab{padding:8px;border:1px solid #6272a4;border-bottom:none;background:#282a36;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#44475a;border-color:#bd93f9;}QTabBar::tab:!selected:hover{background:#515469;}QSlider::handle:horizontal{background:#bd93f9;}"
     
     def _get_red_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#100000")); p.setColor(QPalette.WindowText, QColor("#ff4444")); p.setColor(QPalette.Base, QColor("#180000")); p.setColor(QPalette.AlternateBase, QColor("#281010")); p.setColor(QPalette.ToolTipBase, Qt.white); p.setColor(QPalette.ToolTipText, Qt.black); p.setColor(QPalette.Text, QColor("#ff4444")); p.setColor(QPalette.Button, QColor("#400000")); p.setColor(QPalette.ButtonText, QColor("#ff6666")); p.setColor(QPalette.BrightText, QColor("#ff8888")); p.setColor(QPalette.Link, QColor("#ff2222")); p.setColor(QPalette.Highlight, QColor("#D00000")); p.setColor(QPalette.HighlightedText, Qt.white); p.setColor(QPalette.Disabled, QPalette.Text, QColor("#805050")); p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#805050")); return p
@@ -480,7 +447,7 @@ class DSDApp(QMainWindow):
                     print(f"Warning: Could not load UI setting for '{key}': {e}")
         
         if hasattr(self, 'recorder_dir_edit'): self.recorder_dir_edit.setText(ui_settings.get('recorder_dir_edit', ''))
-        if hasattr(self, 'volume_slider'): self.volume_slider.setValue(ui_settings.get('volume_slider', 70))
+        if hasattr(self, 'volume_slider'): self.volume_slider.setValue(ui_settings.get('volume_slider', 100))
 
 
     def _save_app_config(self):
@@ -672,7 +639,7 @@ class DSDApp(QMainWindow):
         main_layout = QGridLayout(group)
         
         self.device_combo = QComboBox(); self.populate_audio_devices()
-        self.volume_slider = QSlider(Qt.Horizontal); self.volume_slider.setRange(0, 100)
+        self.volume_slider = QSlider(Qt.Horizontal); self.volume_slider.setRange(0, 150)
         self.mute_check = QCheckBox("Mute"); self._add_widget('mute_check', self.mute_check)
         self.rms_label = QLabel("RMS: --"); self.peak_freq_label = QLabel("Peak Freq: --")
         
@@ -682,7 +649,6 @@ class DSDApp(QMainWindow):
         main_layout.addWidget(self.rms_label, 2, 0); main_layout.addWidget(self.peak_freq_label, 2, 1)
 
         if is_dashboard:
-            # --- ZMIANA 1: Przycisk otwierający Audio-Lab ---
             self.audio_lab_btn = QPushButton("Open Audio-Lab")
             self.audio_lab_btn.clicked.connect(self.open_audio_lab)
             main_layout.addWidget(self.audio_lab_btn, 3, 0, 1, 3)
@@ -704,10 +670,9 @@ class DSDApp(QMainWindow):
         return group
     
     def open_audio_lab(self):
-        # Zainicjuj okno, jeśli jeszcze nie istnieje
         if not hasattr(self, 'audio_lab_window'):
             self.audio_lab_window = AudioProcessingWindow(self)
-        self.audio_lab_window.exec_() # Użyj exec_ dla modalnego okna
+        self.audio_lab_window.exec_()
 
     def _create_alerts_tab(self):
         widget = QWidget(); layout = QGridLayout(widget)
@@ -809,15 +774,33 @@ class DSDApp(QMainWindow):
 
     def _create_io_tab(self):
         tab = QWidget(); layout = QVBoxLayout(tab)
+        
+        # --- Input Group ---
         g1 = QGroupBox("Input (-i)"); l1 = QGridLayout(g1)
-        input_type_combo = self._add_widget("-i_type", QComboBox()); input_type_combo.addItems(["rtl", "tcp", "wav", "pulse", "m17udp"])
-        self._add_widget("-i_tcp", QLineEdit("127.0.0.1:7355")); self._add_widget("-i_wav", QLineEdit())
+        input_type_combo = self._add_widget("-i_type", QComboBox())
+        input_type_combo.addItems(["tcp", "rtl", "audio", "wav", "pulse", "m17udp"])
+        input_type_combo.setCurrentText("tcp")
+
+        self._add_widget("-i_tcp", QLineEdit("127.0.0.1:7355"))
+        self._add_widget("-i_wav", QLineEdit())
         self._add_widget("-i_m17udp", QLineEdit("127.0.0.1:17000"))
+        
         l1.addWidget(QLabel("Type:"), 0, 0); l1.addWidget(self.widgets["-i_type"], 0, 1)
         l1.addWidget(QLabel("TCP Addr:Port:"), 1, 0); l1.addWidget(self.widgets["-i_tcp"], 1, 1)
         l1.addWidget(QLabel("WAV File:"), 2, 0); l1.addWidget(self.widgets["-i_wav"], 2, 1); l1.addWidget(self._create_browse_button(self.widgets["-i_wav"]), 2, 2)
         l1.addWidget(QLabel("M17 UDP Addr:Port:"), 3, 0); l1.addWidget(self.widgets["-i_m17udp"], 3, 1)
         layout.addWidget(g1)
+        
+        # --- Audio Input Group ---
+        self.audio_input_group = QGroupBox("Audio Input Options")
+        l_audio = QGridLayout(self.audio_input_group)
+        self._add_widget("audio_in_dev", QComboBox())
+        self._populate_audio_input_devices()
+        l_audio.addWidget(QLabel("Device:"), 0, 0)
+        l_audio.addWidget(self.widgets["audio_in_dev"], 0, 1)
+        layout.addWidget(self.audio_input_group)
+        
+        # --- RTL-SDR Group ---
         self.rtl_group = QGroupBox("RTL-SDR Options"); l_rtl = QGridLayout(self.rtl_group)
         self._add_widget("rtl_dev", QComboBox())
         self.rtl_refresh_btn = QPushButton("Refresh List"); self.rtl_refresh_btn.clicked.connect(self._populate_rtl_devices)
@@ -831,8 +814,22 @@ class DSDApp(QMainWindow):
         l_rtl.addWidget(QLabel("Bandwidth (kHz):"), 4, 0); l_rtl.addWidget(self.widgets["rtl_bw"], 4, 1)
         l_rtl.addWidget(QLabel("Squelch Level:"), 5, 0); l_rtl.addWidget(self.widgets["rtl_sq"], 5, 1)
         l_rtl.addWidget(QLabel("Sample Volume:"), 6, 0); l_rtl.addWidget(self.widgets["rtl_vol"], 6, 1)
-        layout.addWidget(self.rtl_group); self.rtl_group.setVisible(True); self._populate_rtl_devices()
-        input_type_combo.currentTextChanged.connect(lambda text: self.rtl_group.setVisible(text == 'rtl'))
+        layout.addWidget(self.rtl_group)
+        self._populate_rtl_devices()
+        
+        def toggle_input_options(text):
+            is_rtl = (text == 'rtl')
+            is_audio = (text == 'audio')
+            self.rtl_group.setVisible(is_rtl)
+            self.audio_input_group.setVisible(is_audio)
+            self.widgets['-i_tcp'].setEnabled(text == 'tcp')
+            self.widgets["-i_wav"].setEnabled(text == 'wav')
+            self.widgets["-i_m17udp"].setEnabled(text == 'm17udp')
+
+        input_type_combo.currentTextChanged.connect(toggle_input_options)
+        toggle_input_options(input_type_combo.currentText())
+
+        # --- File Outputs and Other ---
         bottom_layout = QGridLayout()
         g3 = QGroupBox("File Outputs"); l3 = QGridLayout(g3)
         self._add_widget("-w", QLineEdit()); self._add_widget("-6", QLineEdit()); self._add_widget("-c", QLineEdit())
@@ -881,6 +878,22 @@ class DSDApp(QMainWindow):
         except Exception as e:
             combo.addItem("Error querying devices")
             print(f"Error enumerating RTL-SDR devices: {e}")
+
+    def _populate_audio_input_devices(self):
+        combo = self.widgets.get("audio_in_dev")
+        if not combo: return
+        combo.clear()
+        try:
+            devices = sd.query_devices()
+            default_in = sd.default.device[0]
+            for i, device in enumerate(devices):
+                if device['max_input_channels'] > 0:
+                    combo.addItem(f"{device['name']}{' (Default)' if i == default_in else ''}", userData=i)
+            if combo.count() == 0:
+                combo.addItem("No audio input devices found.")
+        except Exception as e:
+            combo.addItem("Error querying devices")
+            print(f"Error querying audio input devices: {e}")
             
     def _create_decoder_tab(self):
         tab = QWidget(); scroll = QScrollArea(); scroll.setWidgetResizable(True); layout = QVBoxLayout(tab); layout.addWidget(scroll); container = QWidget(); scroll.setWidget(container); grid = QGridLayout(container)
@@ -1130,9 +1143,14 @@ class DSDApp(QMainWindow):
         if not self.dsd_fme_path: self.cmd_preview.setText("ERROR: DSD-FME path not set!"); return []
         command = [self.dsd_fme_path, "-o", f"udp:{UDP_IP}:{UDP_PORT}"]
         in_type = self.widgets["-i_type"].currentText()
+
         if in_type == "tcp": command.extend(["-i", f"tcp:{self.widgets['-i_tcp'].text()}" if self.widgets['-i_tcp'].text() else "tcp"])
         elif in_type == "wav": self.widgets['-i_wav'].text() and command.extend(["-i", self.widgets['-i_wav'].text()])
         elif in_type == "m17udp": command.extend(["-i", f"m17udp:{self.widgets['-i_m17udp'].text()}" if self.widgets['-i_m17udp'].text() else "m17udp"])
+        elif in_type == "audio":
+            dev_index = self.widgets["audio_in_dev"].currentData()
+            if dev_index is not None: command.extend(["-i", f"pa:{dev_index}"])
+            else: QMessageBox.critical(self, "Error", "No audio input device selected."); return []
         elif in_type == "rtl":
             dev_index = self.widgets["rtl_dev"].currentData()
             if dev_index is None: QMessageBox.critical(self, "Error", "No RTL-SDR device selected or found."); return []
@@ -1147,8 +1165,12 @@ class DSDApp(QMainWindow):
         else: command.extend(["-i", in_type])
         
         for flag in ["-s","-g","-V","-w","-6","-c","-b","-1","-H","-K","-C","-G","-U","-d","-r","-n","-u","-L","-Q","-M","-S","-X","-D","-v","-R","-k","-7","-I","-B","-t"]:
-            if self.widgets.get(flag) and self.widgets[flag].text(): command.extend([flag, self.widgets[flag].text()])
-        
+            widget = self.widgets.get(flag)
+            if widget and hasattr(widget, 'text') and widget.text():
+                 command.extend([flag, widget.text()])
+            elif widget and isinstance(widget, QCheckBox) and widget.isChecked():
+                 command.append(flag)
+
         for flag in ["-l","-xx","-xr","-xd","-xz","-N","-Z","-4","-0","-3","-F","-T","-Y","-p","-E","-e","-q","-z","-y","-8","-P","-a","-W"]:
             if self.widgets.get(flag) and self.widgets[flag].isChecked(): command.append(flag)
         
@@ -1692,9 +1714,6 @@ class DSDApp(QMainWindow):
     def apply_filters(self, samples):
         samples = samples.astype(np.float32)
 
-        if self.rnnoise_denoiser and self.widgets["rnnoise_check"].isChecked():
-            samples = self.rnnoise_denoiser.filter(samples)
-
         if self.widgets['agc_check'].isChecked():
             strength = self.widgets['agc_strength_slider'].value() / 100.0
             target_rms = 0.1
@@ -1734,7 +1753,7 @@ class DSDApp(QMainWindow):
             samples, self.filter_states['notch_filter'] = signal.lfilter(b, a, samples, zi=self.filter_states['notch_filter'])
             
         if hasattr(self, 'eq_sliders'):
-            eq_bands = [60, 170, 310, 600, 1000, 3000, 6000, 12000]
+            eq_bands = [100, 300, 600, 1000, 3000, 6000]
             for i, slider in enumerate(self.eq_sliders):
                 gain_db = slider.value()
                 if gain_db != 0:
@@ -1772,45 +1791,6 @@ if __name__ == '__main__':
     if hasattr(Qt, 'AA_EnableHighDpiScaling'): QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     if hasattr(Qt, 'AA_UseHighDpiPixmaps'): QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     
-    if not os.path.exists('rnn_wrapper.py') and not RNN_AVAILABLE:
-        try:
-            with open('rnn_wrapper.py', 'w') as f:
-                f.write("""
-import numpy as np
-try:
-    from rnnoise_wrapper import RNNoise as RNNoiseCore
-    RNN_CORE_AVAILABLE = True
-except ImportError:
-    RNN_CORE_AVAILABLE = False
-
-class RNNoise:
-    def __init__(self):
-        if not RNN_CORE_AVAILABLE:
-            self.denoiser = None
-            print("Biblioteka 'rnnoise-wrapper' nie jest zainstalowana. RNNoise jest niedostępne.")
-            return
-        self.denoiser = RNNoiseCore()
-
-    def filter(self, audio_chunk_float32):
-        if not self.denoiser:
-            return (audio_chunk_float32 * 32767.0).astype(np.int16)
-
-        processed_audio = np.array([], dtype=np.float32)
-        for i in range(0, len(audio_chunk_float32), 480):
-            chunk = audio_chunk_float32[i:i+480]
-            if len(chunk) < 480:
-                chunk = np.pad(chunk, (0, 480 - len(chunk)), 'constant')
-            
-            denoised_chunk = np.array(self.denoiser.filter(chunk), dtype=np.float32)
-            processed_audio = np.append(processed_audio, denoised_chunk)
-        
-        return processed_audio[:len(audio_chunk_float32)]
-""")
-            print("Utworzono plik 'rnn_wrapper.py'. Proszę zainstalować 'rnnoise-wrapper' (`pip install rnnoise-wrapper`) aby używać RNNoise.")
-        except Exception as e:
-            print(f"Nie udało się utworzyć pliku rnn_wrapper.py: {e}")
-
-
     app = QApplication(sys.argv)
     
     main_window = DSDApp()
