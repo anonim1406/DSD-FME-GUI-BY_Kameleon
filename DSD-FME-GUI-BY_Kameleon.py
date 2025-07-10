@@ -9,18 +9,43 @@ import shlex
 import threading
 import csv
 import socket
+import time
+import numpy as np
 
+# --- Zapis w AppData ---
+APP_NAME = "DSD-FME-GUI"
+if sys.platform == "win32":
+    APP_DATA_DIR = os.path.join(os.environ['APPDATA'], APP_NAME)
+else:
+    APP_DATA_DIR = os.path.join(os.path.expanduser('~'), '.config', APP_NAME)
+os.makedirs(APP_DATA_DIR, exist_ok=True)
 
 def resource_path(relative_path):
-    """ Get absolute path to resource, works for dev and for PyInstaller """
     try:
-        
         base_path = sys._MEIPASS
     except Exception:
-        base_path = os.path.abspath(".")
+        base_path = APP_DATA_DIR
+        if relative_path in ['dsd-fme.exe', 'dsd-fme']:
+             base_path = os.path.abspath(".")
+    
+    local_path = os.path.join(os.path.abspath("."), relative_path)
+    appdata_path = os.path.join(base_path, relative_path)
 
-    return os.path.join(base_path, relative_path)
-
+    if not os.path.exists(appdata_path) and os.path.exists(local_path) and relative_path not in ['dsd-fme.exe', 'dsd-fme']:
+        import shutil
+        try:
+            shutil.copy2(local_path, appdata_path)
+        except Exception as e:
+            print(f"Nie udało się skopiować pliku {relative_path} do AppData: {e}")
+            return local_path
+    
+    if relative_path.endswith('.json') or relative_path.endswith('.html'):
+        return appdata_path
+    
+    if relative_path in ['dsd-fme.exe', 'dsd-fme']:
+        return os.path.join(os.path.abspath("."), relative_path)
+        
+    return appdata_path
 
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import QFont, QPalette, QColor, QTextCursor, QKeySequence
@@ -28,8 +53,8 @@ from PyQt5.QtMultimedia import QSound
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QObject, pyqtSlot, QTimer, QDir, QFileSystemWatcher, QDate, QEvent, QUrl
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 
-import numpy as np
 import pyqtgraph as pg
+from pyqtgraph import DateAxisItem, AxisItem
 import sounddevice as sd
 from scipy import signal
 import folium
@@ -45,8 +70,12 @@ try:
     RTLSDR_AVAILABLE = True
 except ImportError:
     RTLSDR_AVAILABLE = False
-
-
+    
+try:
+    from rnn_wrapper import RNNoise
+    RNN_AVAILABLE = True
+except ImportError:
+    RNN_AVAILABLE = False
 
 CONFIG_FILE = resource_path('dsd-fme-gui-config.json')
 ALIASES_FILE = resource_path('dsd-fme-aliases.json')
@@ -57,7 +86,168 @@ MIN_DB = -70; MAX_DB = 50
 AUDIO_RATE = 16000; AUDIO_DTYPE = np.int16
 WAV_CHANNELS = 1; WAV_SAMPWIDTH = 2
 
+class IntegerAxis(AxisItem):
+    def tickStrings(self, values, scale, spacing):
+        return [f'{int(v)}' for v in values]
 
+# --- ZMIANA 1: Nowe okno dla filtrów i EQ ---
+class AudioProcessingWindow(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.main_app = parent
+        self.setWindowTitle("Audio-Lab")
+        self.setGeometry(200, 200, 600, 700)
+        
+        main_layout = QVBoxLayout(self)
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        main_layout.addWidget(scroll_area)
+
+        container_widget = QWidget()
+        scroll_area.setWidget(container_widget)
+        container_layout = QVBoxLayout(container_widget)
+
+        container_layout.addWidget(self._create_equalizer_group())
+        container_layout.addWidget(self._create_standard_filters_group())
+        container_layout.addWidget(self._create_advanced_filters_group())
+
+        # Przyciski na dole
+        button_layout = QHBoxLayout()
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.accept)
+        button_layout.addStretch()
+        button_layout.addWidget(close_button)
+        main_layout.addLayout(button_layout)
+
+    def _create_equalizer_group(self):
+        group = QGroupBox("8-Band Equalizer")
+        main_layout = QVBoxLayout(group)
+        
+        eq_layout = QHBoxLayout()
+        self.main_app.eq_sliders = []
+        self.main_app.eq_labels = []
+        eq_bands = [60, 170, 310, 600, 1000, 3000, 6000]
+
+        for i, freq in enumerate(eq_bands):
+            slider_v_layout = QVBoxLayout()
+            label = QLabel(f"{freq / 1000 if freq >= 1000 else freq}{'k' if freq >= 1000 else ''}Hz")
+            label.setAlignment(Qt.AlignCenter)
+            
+            slider = QSlider(Qt.Vertical)
+            slider.setRange(-15, 15)
+            slider.setValue(0)
+            slider.setTickPosition(QSlider.TicksBothSides)
+            slider.setTickInterval(5)
+            self.main_app._add_widget(f'eq_band_{i}', slider)
+            
+            slider_v_layout.addWidget(label)
+            slider_v_layout.addWidget(slider)
+            eq_layout.addLayout(slider_v_layout)
+            self.main_app.eq_sliders.append(slider)
+        main_layout.addLayout(eq_layout)
+        
+        # --- ZMIANA 2: Przyciski Reset i Auto ---
+        btn_layout = QHBoxLayout()
+        reset_btn = QPushButton("Reset to Default")
+        reset_btn.clicked.connect(self.reset_equalizer)
+        auto_btn = QPushButton("Auto")
+        auto_btn.setToolTip("Currently resets to default. Future AI implementation planned.")
+        auto_btn.clicked.connect(self.reset_equalizer) # Placeholder
+        btn_layout.addStretch()
+        btn_layout.addWidget(auto_btn)
+        btn_layout.addWidget(reset_btn)
+        main_layout.addLayout(btn_layout)
+        
+        return group
+
+    def _create_standard_filters_group(self):
+        group = QGroupBox("Standard Filters")
+        main_layout = QVBoxLayout(group)
+        l1 = QGridLayout()
+        
+        l1.addWidget(self.main_app._add_widget("hp_filter_check", QCheckBox("High-pass Filter")), 0, 0)
+        l1.addWidget(self.main_app._add_widget("hp_cutoff_spin", QSpinBox(), {'range': (100, 2000), 'suffix': ' Hz', 'value': 300}), 0, 1)
+        l1.addWidget(self.main_app._add_widget("lp_filter_check", QCheckBox("Low-pass Filter")), 1, 0)
+        l1.addWidget(self.main_app._add_widget("lp_cutoff_spin", QSpinBox(), {'range': (1000, 8000), 'suffix': ' Hz', 'value': 3400}), 1, 1)
+        l1.addWidget(self.main_app._add_widget("bp_filter_check", QCheckBox("Band-pass Filter")), 2, 0)
+        l1.addWidget(self.main_app._add_widget("bp_center_spin", QSpinBox(), {'range': (300, 5000), 'suffix': ' Hz', 'value': 1500}), 2, 1)
+        l1.addWidget(self.main_app._add_widget("bp_width_spin", QSpinBox(), {'range': (100, 3000), 'suffix': ' Hz', 'value': 1000}), 2, 2)
+        l1.addWidget(self.main_app._add_widget("notch_filter_check", QCheckBox("Notch Filter")), 3, 0)
+        l1.addWidget(self.main_app._add_widget("notch_freq_spin", QSpinBox(), {'range': (100, 8000), 'suffix': ' Hz', 'value': 1000}), 3, 1)
+        l1.addWidget(self.main_app._add_widget("notch_q_spin", QSpinBox(), {'range': (1, 100), 'value': 30}), 3, 2)
+        main_layout.addLayout(l1)
+        
+        btn_layout = QHBoxLayout()
+        reset_btn = QPushButton("Reset to Default")
+        reset_btn.clicked.connect(self.reset_standard_filters)
+        auto_btn = QPushButton("Auto")
+        auto_btn.setToolTip("Currently resets to default. Future AI implementation planned.")
+        auto_btn.clicked.connect(self.reset_standard_filters) # Placeholder
+        btn_layout.addStretch()
+        btn_layout.addWidget(auto_btn)
+        btn_layout.addWidget(reset_btn)
+        main_layout.addLayout(btn_layout)
+        
+        return group
+        
+    def _create_advanced_filters_group(self):
+        group = QGroupBox("Advanced Filters")
+        main_layout = QVBoxLayout(group)
+        l2 = QGridLayout()
+
+        l2.addWidget(self.main_app._add_widget("agc_check", QCheckBox("Automatic Gain Control (AGC)")), 0, 0)
+        l2.addWidget(QLabel("Strength:"), 0, 1)
+        l2.addWidget(self.main_app._add_widget("agc_strength_slider", QSlider(Qt.Horizontal), {'range': (0, 100), 'value': 50}), 0, 2)
+        
+        l2.addWidget(self.main_app._add_widget("nr_check", QCheckBox("Noise Reduction (Simple)")), 1, 0)
+        l2.addWidget(QLabel("Strength:"), 1, 1)
+        l2.addWidget(self.main_app._add_widget("nr_strength_slider", QSlider(Qt.Horizontal), {'range': (0, 100), 'value': 50}), 1, 2)
+        
+        self.main_app.rnnoise_check = self.main_app._add_widget("rnnoise_check", QCheckBox("RNNoise Denoising (AI based)"))
+        if not RNN_AVAILABLE:
+            self.main_app.rnnoise_check.setToolTip("RNNoise library not found. Please install 'rnn_wrapper'.")
+            self.main_app.rnnoise_check.setEnabled(False)
+        l2.addWidget(self.main_app.rnnoise_check, 2, 0, 1, 3)
+        main_layout.addLayout(l2)
+
+        btn_layout = QHBoxLayout()
+        reset_btn = QPushButton("Reset to Default")
+        reset_btn.clicked.connect(self.reset_advanced_filters)
+        auto_btn = QPushButton("Auto")
+        auto_btn.setToolTip("Currently resets to default. Future AI implementation planned.")
+        auto_btn.clicked.connect(self.reset_advanced_filters) # Placeholder
+        btn_layout.addStretch()
+        btn_layout.addWidget(auto_btn)
+        btn_layout.addWidget(reset_btn)
+        main_layout.addLayout(btn_layout)
+
+        return group
+
+    def reset_equalizer(self):
+        for slider in self.main_app.eq_sliders:
+            slider.setValue(0)
+    
+    def reset_standard_filters(self):
+        self.main_app.widgets['hp_filter_check'].setChecked(False)
+        self.main_app.widgets['lp_filter_check'].setChecked(False)
+        self.main_app.widgets['bp_filter_check'].setChecked(False)
+        self.main_app.widgets['notch_filter_check'].setChecked(False)
+        
+        self.main_app.widgets['hp_cutoff_spin'].setValue(300)
+        self.main_app.widgets['lp_cutoff_spin'].setValue(3400)
+        self.main_app.widgets['bp_center_spin'].setValue(1500)
+        self.main_app.widgets['bp_width_spin'].setValue(1000)
+        self.main_app.widgets['notch_freq_spin'].setValue(1000)
+        self.main_app.widgets['notch_q_spin'].setValue(30)
+        
+    def reset_advanced_filters(self):
+        self.main_app.widgets['agc_check'].setChecked(False)
+        self.main_app.widgets['nr_check'].setChecked(False)
+        self.main_app.widgets['rnnoise_check'].setChecked(False)
+        
+        self.main_app.widgets['agc_strength_slider'].setValue(50)
+        self.main_app.widgets['nr_strength_slider'].setValue(50)
+        
 
 class ProcessReader(QObject):
     line_read = pyqtSignal(str); finished = pyqtSignal()
@@ -101,20 +291,31 @@ class DSDApp(QMainWindow):
         self.is_recording = False; self.wav_file = None; self.is_resetting = False
         self.transmission_log = {}; self.last_logged_id = None
         self.output_stream = None; self.volume = 0.7
-        self.filter_lp_state = None; self.filter_hp_state = None
+        self.filter_states = {}
         self.aliases = {'tg': {}, 'id': {}}
         self.current_tg = None; self.current_id = None; self.current_cc = None
         self.fs_watcher = QFileSystemWatcher(); self.fs_watcher.directoryChanged.connect(self.update_recording_list)
         self.lrrp_watcher = QFileSystemWatcher()
         self.lrrp_watcher.fileChanged.connect(self.update_map_from_lrrp)
+        
+        self.rnnoise_denoiser = RNNoise() if RNN_AVAILABLE else None
 
-        self.setWindowTitle("DSD-FME GUI Suite by Kameleon v2.2 (stable)"); self.setGeometry(100, 100, 1400, 950)
+        # --- ZMIANA 3: Zmiana tytułu ---
+        self.setWindowTitle("DSD-FME-GUI-BY Kameleon v3.0")
+        self.setGeometry(100, 100, 1600, 950)
         
         self.widgets = {}; self.inverse_widgets = {}
         self.live_labels_conf = {}; self.live_labels_dash = {}
         
         self._create_theme_manager()
         
+        self.colormaps = {
+            "Amber Alert": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,0,0),(150,80,0),(255,170,0)]), "Night Mode (Red)": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,0,0),(130,0,0),(255,50,50)]),
+            "Inferno (High Contrast)": pg.ColorMap(pos=np.linspace(0.0,1.0,4),color=[(0,0,0),(120,0,0),(255,100,0),(255,255,100)]), "Oceanic (Blue)": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,0,20),(0,80,130),(100,200,200)]),
+            "Grayscale (Mono)": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,0,0),(128,128,128),(255,255,255)]), "Military Green": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,0,0),(0,120,0),(0,255,0)]),
+            "Night Vision": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,20,0),(0,180,80),(100,255,150)]), "Arctic Blue": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,0,0),(0,0,150),(100,180,255)])
+        }
+
         self.dsd_fme_path = self._load_config_or_prompt()
         if self.dsd_fme_path: 
             self._init_ui()
@@ -122,11 +323,19 @@ class DSDApp(QMainWindow):
             self.load_aliases()
         else: 
             QTimer.singleShot(100, self.close)
-
-   
+    
+    # --- ZMIANA 4: Poprawki motywów ---
     def _create_theme_manager(self):
         self.themes = {
             "Default (Kameleon Dark)": { "palette": self._get_dark_palette, "stylesheet": self._get_dark_stylesheet, "pg_background": "#15191c", "pg_foreground": "#e0e0e0", "spec_colormap": "Amber Alert" },
+            "Matrix": { "palette": self._get_matrix_palette, "stylesheet": self._get_matrix_stylesheet, "pg_background": "#020f03", "pg_foreground": "#00ff41", "spec_colormap": "Military Green" },
+            "Cyberpunk": { "palette": self._get_cyberpunk_palette, "stylesheet": self._get_cyberpunk_stylesheet, "pg_background": "#0c0c28", "pg_foreground": "#f7f722", "spec_colormap": "Inferno (High Contrast)" },
+            "Neon Noir": { "palette": self._get_neon_palette, "stylesheet": self._get_neon_stylesheet, "pg_background": "#101018", "pg_foreground": "#f000ff", "spec_colormap": "Night Vision" },
+            "Retro Gaming": { "palette": self._get_retro_palette, "stylesheet": self._get_retro_stylesheet, "pg_background": "#212121", "pg_foreground": "#eeeeee", "spec_colormap": "Grayscale (Mono)" },
+            "Military Ops": { "palette": self._get_military_palette, "stylesheet": self._get_military_stylesheet, "pg_background": "#1a2418", "pg_foreground": "#a2b59f", "spec_colormap": "Military Green" },
+            "Arctic Ops": { "palette": self._get_arctic_palette, "stylesheet": self._get_arctic_stylesheet, "pg_background": "#e8eef2", "pg_foreground": "#1c2e4a", "spec_colormap": "Arctic Blue" },
+            "Solarized Dark": { "palette": self._get_solarized_dark_palette, "stylesheet": self._get_solarized_dark_stylesheet, "pg_background": "#002b36", "pg_foreground": "#839496", "spec_colormap": "Oceanic (Blue)" },
+            "Dracula": { "palette": self._get_dracula_palette, "stylesheet": self._get_dracula_stylesheet, "pg_background": "#282a36", "pg_foreground": "#f8f8f2", "spec_colormap": "Night Mode (Red)" },
             "Night Mode (Astro Red)": { "palette": self._get_red_palette, "stylesheet": self._get_red_stylesheet, "pg_background": "#0a0000", "pg_foreground": "#ff4444", "spec_colormap": "Night Mode (Red)" },
             "Oceanic (Deep Blue)": { "palette": self._get_blue_palette, "stylesheet": self._get_blue_stylesheet, "pg_background": "#0B1D28", "pg_foreground": "#E0FFFF", "spec_colormap": "Oceanic (Blue)" },
             "Light (High Contrast)": { "palette": self._get_light_palette, "stylesheet": self._get_light_stylesheet, "pg_background": "#E8E8E8", "pg_foreground": "#000000", "spec_colormap": "Grayscale (Mono)" },
@@ -148,105 +357,88 @@ class DSDApp(QMainWindow):
 
         if hasattr(self, 'imv'): self.imv.setColorMap(self.colormaps[theme["spec_colormap"]])
         if hasattr(self, 'scope_curve'): self.scope_curve.setPen(app.palette().highlight().color())
-    
+
     def _get_dark_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor(21, 25, 28)); p.setColor(QPalette.WindowText, QColor(224, 224, 224)); p.setColor(QPalette.Base, QColor(30, 35, 40)); p.setColor(QPalette.AlternateBase, QColor(44, 52, 58)); p.setColor(QPalette.ToolTipBase, Qt.white); p.setColor(QPalette.ToolTipText, Qt.black); p.setColor(QPalette.Text, QColor(224, 224, 224)); p.setColor(QPalette.Button, QColor(44, 52, 58)); p.setColor(QPalette.ButtonText, QColor(224, 224, 224)); p.setColor(QPalette.BrightText, Qt.red); p.setColor(QPalette.Link, QColor(255, 170, 0)); p.setColor(QPalette.Highlight, QColor(255, 170, 0)); p.setColor(QPalette.HighlightedText, Qt.black); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
     def _get_dark_stylesheet(self): 
         return """
-            QWidget{color:#e0e0e0;font-size:9pt}
-            QGroupBox{font-weight:bold;border:1px solid #3a4149;border-radius:6px;margin-top:1ex}
-            QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#15191c}
-            QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #3a4149;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2c343a,stop:1 #242b30)}
-            QPushButton:hover{background-color:#3e4850;border:1px solid #ffaa00}
-            QPushButton:pressed{background-color:#242b30}
-            QPushButton:disabled{color:#777;background-color:#242b30;border:1px solid #3a4149}
-            QTabWidget::pane{border-top:2px solid #3a4149}
-            QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#1e2328;border:1px solid #3a4149;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px}
-            QTabBar::tab:selected{background-color:#2c343a;border:1px solid #ffaa00;border-bottom:none}
-            QTabBar::tab:!selected:hover{background-color:#353e44}
-            QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit{border-radius:4px;border:1px solid #3a4149;padding:4px}
-            QPlainTextEdit{border-radius:4px;border:1px solid #3a4149;padding:4px;background-color:#1E2328;color:#33FF33;font-family:Consolas,monospace}
-            QSlider::groove:horizontal{border:1px solid #3a4149;height:8px;background:#242b30;border-radius:4px}
-            QSlider::handle:horizontal{background:#ffaa00;border:1px solid #ffaa00;width:18px;margin:-2px 0;border-radius:9px}
-            QHeaderView::section{background-color:#2c343a;color:#e0e0e0;padding:4px;border:1px solid #3a4149;font-weight:bold}
+            QWidget{color:#e0e0e0;font-size:9pt} QGroupBox{font-weight:bold;border:1px solid #3a4149;border-radius:6px;margin-top:1ex; background-color: #1e2328;} QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#15191c} QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #3a4149;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2c343a,stop:1 #242b30)} QPushButton:hover{background-color:#3e4850;border:1px solid #ffaa00} QPushButton:pressed{background-color:#242b30} QPushButton:disabled{color:#777;background-color:#242b30;border:1px solid #3a4149} QTabWidget::pane{border-top:2px solid #3a4149} QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#1e2328;border:1px solid #3a4149;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px} QTabBar::tab:selected{background-color:#2c343a;border:1px solid #ffaa00;border-bottom:none} QTabBar::tab:!selected:hover{background-color:#353e44} QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit,QPlainTextEdit,QListView{border-radius:4px;border:1px solid #3a4149;padding:4px} QPlainTextEdit{color:#33FF33;font-family:Consolas,monospace} QSlider::groove:horizontal{border:1px solid #3a4149;height:8px;background:#242b30;border-radius:4px} QSlider::handle:horizontal{background:#ffaa00;border:1px solid #ffaa00;width:18px;margin:-2px 0;border-radius:9px} QHeaderView::section{background-color:#2c343a;color:#e0e0e0;padding:4px;border:1px solid #3a4149;font-weight:bold}
         """
+    def _get_matrix_palette(self):
+        p = QPalette(); p.setColor(QPalette.Window, QColor("#020f03")); p.setColor(QPalette.WindowText, QColor("#00ff41")); p.setColor(QPalette.Base, QColor("#051803")); p.setColor(QPalette.AlternateBase, QColor("#0a2808")); p.setColor(QPalette.Text, QColor("#33ff77")); p.setColor(QPalette.Button, QColor("#0a2808")); p.setColor(QPalette.ButtonText, QColor("#00ff41")); p.setColor(QPalette.Highlight, QColor("#00ff41")); p.setColor(QPalette.HighlightedText, Qt.black); p.setColor(QPalette.Link, QColor("#66ff99")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
+    def _get_matrix_stylesheet(self): return "QWidget{font-family: 'Courier New', monospace; color:#00ff41; background-color:#020f03;} QGroupBox{border:1px solid #00ff41; background-color:#051803;} QGroupBox::title{background-color:#020f03;} QPushButton{border:1px solid #00ff41; background-color:#103010;} QPushButton:hover{background-color:#205020;} QTabBar::tab:selected{border:1px solid #00ff41; background:#205020;} QSlider::handle:horizontal{background:#00ff41;}"
+    
+    def _get_cyberpunk_palette(self):
+        p = QPalette(); p.setColor(QPalette.Window, QColor("#0c0c28")); p.setColor(QPalette.WindowText, QColor("#f7f722")); p.setColor(QPalette.Base, QColor("#141434")); p.setColor(QPalette.AlternateBase, QColor("#222248")); p.setColor(QPalette.Text, QColor("#ffffff")); p.setColor(QPalette.Button, QColor("#141434")); p.setColor(QPalette.ButtonText, QColor("#f7f722")); p.setColor(QPalette.Highlight, QColor("#f7f722")); p.setColor(QPalette.HighlightedText, QColor("#0c0c28")); p.setColor(QPalette.Link, QColor("#ff00ff")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
+    def _get_cyberpunk_stylesheet(self): return "QWidget{color:#f7f722; background-color:#0c0c28;} QGroupBox{border:1px solid #ff00ff; background-color:#141434;} QGroupBox::title{background-color:#0c0c28;} QPushButton{border:1px solid #ff00ff; background-color:#202050;} QPushButton:hover{background-color:#303070;} QTabBar::tab:selected{border:1px solid #f7f722; background:#303070;} QSlider::handle:horizontal{background:#f7f722;}"
+    
+    def _get_neon_palette(self):
+        p = QPalette(); p.setColor(QPalette.Window, QColor("#101018")); p.setColor(QPalette.WindowText, QColor("#f000ff")); p.setColor(QPalette.Base, QColor("#181828")); p.setColor(QPalette.AlternateBase, QColor("#202030")); p.setColor(QPalette.Text, QColor("#00ffff")); p.setColor(QPalette.Button, QColor("#202030")); p.setColor(QPalette.ButtonText, QColor("#f000ff")); p.setColor(QPalette.Highlight, QColor("#f000ff")); p.setColor(QPalette.HighlightedText, Qt.black); p.setColor(QPalette.Link, QColor("#00ffff")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
+    def _get_neon_stylesheet(self): return "QWidget{color:#00ffff; background-color:#101018;} QGroupBox{border:1px solid #f000ff; background-color:#181828;} QGroupBox::title{background-color:#101018;} QPushButton{border:1px solid #f000ff; background-color:#251530;} QPushButton:hover{background-color:#352040;} QTabBar::tab:selected{border:1px solid #00ffff; background:#251530;} QSlider::handle:horizontal{background:#00ffff;}"
+
+    def _get_retro_palette(self):
+        p = QPalette(); p.setColor(QPalette.Window, QColor("#212121")); p.setColor(QPalette.WindowText, QColor("#eeeeee")); p.setColor(QPalette.Base, QColor("#303030")); p.setColor(QPalette.AlternateBase, QColor("#424242")); p.setColor(QPalette.Text, QColor("#eeeeee")); p.setColor(QPalette.Button, QColor("#424242")); p.setColor(QPalette.ButtonText, QColor("#eeeeee")); p.setColor(QPalette.Highlight, QColor("#ff5722")); p.setColor(QPalette.HighlightedText, QColor("#212121")); p.setColor(QPalette.Link, QColor("#ffc107")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
+    def _get_retro_stylesheet(self): return "QWidget{font-family: 'Press Start 2P', cursive; color:#eeeeee; background-color:#212121;} QGroupBox{border:1px solid #ff5722; background-color:#303030;} QGroupBox::title{background-color:#212121;} QPushButton{border:1px solid #ffc107; background-color:#424242;} QTabBar::tab:selected{border:1px solid #ff5722;} QSlider::handle:horizontal{background:#ffc107;}"
+
+    def _get_military_palette(self):
+        p = QPalette(); p.setColor(QPalette.Window, QColor("#1a2418")); p.setColor(QPalette.WindowText, QColor("#a2b59f")); p.setColor(QPalette.Base, QColor("#253522")); p.setColor(QPalette.AlternateBase, QColor("#354831")); p.setColor(QPalette.Text, QColor("#c2d0bd")); p.setColor(QPalette.Button, QColor("#354831")); p.setColor(QPalette.ButtonText, QColor("#a2b59f")); p.setColor(QPalette.Highlight, QColor("#849b80")); p.setColor(QPalette.HighlightedText, QColor("#1a2418")); p.setColor(QPalette.Link, QColor("#c2d0bd")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
+    def _get_military_stylesheet(self): return "QWidget{color:#a2b59f; background-color:#1a2418;} QGroupBox{border:1px solid #4a5e46; background-color:#253522;} QGroupBox::title{background-color:#1a2418;} QPushButton{border:1px solid #667b62; background-color:#354831;} QTabBar::tab:selected{border:1px solid #849b80;} QSlider::handle:horizontal{background:#849b80;}"
+    
+    def _get_arctic_palette(self):
+        p = QPalette(); p.setColor(QPalette.Window, QColor("#e8eef2")); p.setColor(QPalette.WindowText, QColor("#1c2e4a")); p.setColor(QPalette.Base, QColor("#fdfdfe")); p.setColor(QPalette.AlternateBase, QColor("#dce4ea")); p.setColor(QPalette.Text, QColor("#2c3e50")); p.setColor(QPalette.Button, QColor("#dce4ea")); p.setColor(QPalette.ButtonText, QColor("#1c2e4a")); p.setColor(QPalette.Highlight, QColor("#3498db")); p.setColor(QPalette.HighlightedText, Qt.white); p.setColor(QPalette.Link, QColor("#2980b9")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
+    def _get_arctic_stylesheet(self): return "QWidget{color:#2c3e50; background-color:#e8eef2;} QGroupBox{border:1px solid #bdc3c7; background-color:#f8f9fa;} QGroupBox::title{background-color:#e8eef2;} QPushButton{border:1px solid #bdc3c7; background-color:#ecf0f1;} QTabBar::tab:selected{border:1px solid #3498db; background:white;} QSlider::handle:horizontal{background:#3498db;}"
+
+    def _get_solarized_dark_palette(self):
+        p = QPalette(); p.setColor(QPalette.Window, QColor("#002b36")); p.setColor(QPalette.WindowText, QColor("#839496")); p.setColor(QPalette.Base, QColor("#073642")); p.setColor(QPalette.AlternateBase, QColor("#002b36")); p.setColor(QPalette.Text, QColor("#839496")); p.setColor(QPalette.Button, QColor("#073642")); p.setColor(QPalette.ButtonText, QColor("#839496")); p.setColor(QPalette.Highlight, QColor("#268bd2")); p.setColor(QPalette.HighlightedText, QColor("#002b36")); p.setColor(QPalette.Link, QColor("#2aa198")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
+    def _get_solarized_dark_stylesheet(self): return "QWidget{color:#839496; background-color:#002b36;} QGroupBox{border:1px solid #586e75; background-color:#073642;} QGroupBox::title{background-color:#002b36;} QPushButton{border:1px solid #586e75; background-color:#073642;} QTabBar::tab:selected{border:1px solid #268bd2;} QSlider::handle:horizontal{background:#268bd2;}"
+
+    def _get_dracula_palette(self):
+        p = QPalette(); p.setColor(QPalette.Window, QColor("#282a36")); p.setColor(QPalette.WindowText, QColor("#f8f8f2")); p.setColor(QPalette.Base, QColor("#1e1f29")); p.setColor(QPalette.AlternateBase, QColor("#44475a")); p.setColor(QPalette.Text, QColor("#f8f8f2")); p.setColor(QPalette.Button, QColor("#44475a")); p.setColor(QPalette.ButtonText, QColor("#f8f8f2")); p.setColor(QPalette.Highlight, QColor("#bd93f9")); p.setColor(QPalette.HighlightedText, QColor("#282a36")); p.setColor(QPalette.Link, QColor("#8be9fd")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
+    def _get_dracula_stylesheet(self): return "QWidget{color:#f8f8f2; background-color:#282a36;} QGroupBox{border:1px solid #bd93f9; background-color:#1e1f29;} QGroupBox::title{background:#282a36;} QPushButton{border:1px solid #6272a4; background-color:#44475a;} QTabBar::tab:selected{border:1px solid #bd93f9;} QSlider::handle:horizontal{background:#bd93f9;}"
+    
     def _get_red_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#100000")); p.setColor(QPalette.WindowText, QColor("#ff4444")); p.setColor(QPalette.Base, QColor("#180000")); p.setColor(QPalette.AlternateBase, QColor("#281010")); p.setColor(QPalette.ToolTipBase, Qt.white); p.setColor(QPalette.ToolTipText, Qt.black); p.setColor(QPalette.Text, QColor("#ff4444")); p.setColor(QPalette.Button, QColor("#400000")); p.setColor(QPalette.ButtonText, QColor("#ff6666")); p.setColor(QPalette.BrightText, QColor("#ff8888")); p.setColor(QPalette.Link, QColor("#ff2222")); p.setColor(QPalette.Highlight, QColor("#D00000")); p.setColor(QPalette.HighlightedText, Qt.white); p.setColor(QPalette.Disabled, QPalette.Text, QColor("#805050")); p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#805050")); return p
     def _get_red_stylesheet(self): 
         return """
-            QWidget{color:#ff4444;font-size:9pt}
-            QGroupBox{font-weight:bold;border:1px solid #502020;border-radius:6px;margin-top:1ex}
-            QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#100000}
-            QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #502020;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #400000,stop:1 #300000)}
-            QPushButton:hover{background-color:#600000;border:1px solid #ff4444}
-            QPushButton:pressed{background-color:#300000}
-            QPushButton:disabled{color:#805050;background-color:#200000;border:1px solid #402020}
-            QTabWidget::pane{border-top:2px solid #502020}
-            QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#300000;border:1px solid #502020;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px}
-            QTabBar::tab:selected{background-color:#400000;border:1px solid #ff4444;border-bottom:none}
-            QTabBar::tab:!selected:hover{background-color:#500000}
-            QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit{border-radius:4px;border:1px solid #502020;padding:4px;background-color:#180000}
-            QPlainTextEdit{border-radius:4px;border:1px solid #502020;padding:4px;background-color:#180000;color:#FF5555;font-family:Consolas,monospace}
-            QSlider::groove:horizontal{border:1px solid #502020;height:8px;background:#300000;border-radius:4px}
-            QSlider::handle:horizontal{background:#D00000;border:1px solid #ff4444;width:18px;margin:-2px 0;border-radius:9px}
-            QHeaderView::section{background-color:#400000;color:#ff6666;padding:4px;border:1px solid #502020;font-weight:bold}
+            QWidget{color:#ff4444;font-size:9pt; background-color: #100000} QGroupBox{font-weight:bold;border:1px solid #502020;border-radius:6px;margin-top:1ex; background-color: #180000;} QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#100000} QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #502020;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #400000,stop:1 #300000)} QPushButton:hover{background-color:#600000;border:1px solid #ff4444} QPushButton:pressed{background-color:#300000} QPushButton:disabled{color:#805050;background-color:#200000;border:1px solid #402020} QTabWidget::pane{border-top:2px solid #502020} QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#300000;border:1px solid #502020;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px} QTabBar::tab:selected{background-color:#400000;border:1px solid #ff4444;border-bottom:none} QTabBar::tab:!selected:hover{background-color:#500000} QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit{border-radius:4px;border:1px solid #502020;padding:4px;} QPlainTextEdit{border-radius:4px;border:1px solid #502020;padding:4px;color:#FF5555;font-family:Consolas,monospace} QSlider::groove:horizontal{border:1px solid #502020;height:8px;background:#300000;border-radius:4px} QSlider::handle:horizontal{background:#D00000;border:1px solid #ff4444;width:18px;margin:-2px 0;border-radius:9px} QHeaderView::section{background-color:#400000;color:#ff6666;padding:4px;border:1px solid #502020;font-weight:bold}
         """
     def _get_blue_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#0B1D28")); p.setColor(QPalette.WindowText, QColor("#E0FFFF")); p.setColor(QPalette.Base, QColor("#112A3D")); p.setColor(QPalette.AlternateBase, QColor("#183852")); p.setColor(QPalette.ToolTipBase, Qt.white); p.setColor(QPalette.ToolTipText, Qt.black); p.setColor(QPalette.Text, QColor("#E0FFFF")); p.setColor(QPalette.Button, QColor("#113048")); p.setColor(QPalette.ButtonText, QColor("#E0FFFF")); p.setColor(QPalette.BrightText, QColor("#90EE90")); p.setColor(QPalette.Link, QColor("#00BFFF")); p.setColor(QPalette.Highlight, QColor("#007BA7")); p.setColor(QPalette.HighlightedText, Qt.white); p.setColor(QPalette.Disabled, QPalette.Text, QColor("#607A8B")); p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#607A8B")); return p
     def _get_blue_stylesheet(self): 
         return """
-            QWidget{color:#E0FFFF;font-size:9pt}
-            QGroupBox{font-weight:bold;border:1px solid #204D6B;border-radius:6px;margin-top:1ex}
-            QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#0B1D28}
-            QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #204D6B;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #183852,stop:1 #112A3D)}
-            QPushButton:hover{background-color:#204D6B;border:1px solid #00BFFF}
-            QPushButton:pressed{background-color:#112A3D}
-            QPushButton:disabled{color:#607A8B;background-color:#112A3D;border:1px solid #204D6B}
-            QTabWidget::pane{border-top:2px solid #204D6B}
-            QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#112A3D;border:1px solid #204D6B;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px}
-            QTabBar::tab:selected{background-color:#183852;border:1px solid #00BFFF;border-bottom:none}
-            QTabBar::tab:!selected:hover{background-color:#204D6B}
-            QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit{border-radius:4px;border:1px solid #204D6B;padding:4px;background-color:#112A3D}
-            QPlainTextEdit{border-radius:4px;border:1px solid #204D6B;padding:4px;background-color:#08141b;color:#A0FFFF;font-family:Consolas,monospace}
-            QSlider::groove:horizontal{border:1px solid #204D6B;height:8px;background:#112A3D;border-radius:4px}
-            QSlider::handle:horizontal{background:#007BA7;border:1px solid #00BFFF;width:18px;margin:-2px 0;border-radius:9px}
-            QHeaderView::section{background-color:#183852;color:#E0FFFF;padding:4px;border:1px solid #204D6B;font-weight:bold}
+            QWidget{color:#E0FFFF;font-size:9pt; background-color:#0B1D28} QGroupBox{font-weight:bold;border:1px solid #204D6B;border-radius:6px;margin-top:1ex; background-color:#112A3D} QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#0B1D28} QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #204D6B;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #183852,stop:1 #112A3D)} QPushButton:hover{background-color:#204D6B;border:1px solid #00BFFF} QPushButton:pressed{background-color:#112A3D} QPushButton:disabled{color:#607A8B;background-color:#112A3D;border:1px solid #204D6B} QTabWidget::pane{border-top:2px solid #204D6B} QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#112A3D;border:1px solid #204D6B;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px} QTabBar::tab:selected{background-color:#183852;border:1px solid #00BFFF;border-bottom:none} QTabBar::tab:!selected:hover{background-color:#204D6B} QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit{border-radius:4px;border:1px solid #204D6B;padding:4px;} QPlainTextEdit{border-radius:4px;border:1px solid #204D6B;padding:4px;background-color:#08141b;color:#A0FFFF;font-family:Consolas,monospace} QSlider::groove:horizontal{border:1px solid #204D6B;height:8px;background:#112A3D;border-radius:4px} QSlider::handle:horizontal{background:#007BA7;border:1px solid #00BFFF;width:18px;margin:-2px 0;border-radius:9px} QHeaderView::section{background-color:#183852;color:#E0FFFF;padding:4px;border:1px solid #204D6B;font-weight:bold}
         """
     def _get_light_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#F0F0F0")); p.setColor(QPalette.WindowText, QColor("#000000")); p.setColor(QPalette.Base, QColor("#FFFFFF")); p.setColor(QPalette.AlternateBase, QColor("#E8E8E8")); p.setColor(QPalette.ToolTipBase, QColor("#333333")); p.setColor(QPalette.ToolTipText, QColor("#FFFFFF")); p.setColor(QPalette.Text, QColor("#000000")); p.setColor(QPalette.Button, QColor("#E0E0E0")); p.setColor(QPalette.ButtonText, QColor("#000000")); p.setColor(QPalette.BrightText, Qt.red); p.setColor(QPalette.Link, QColor("#0000FF")); p.setColor(QPalette.Highlight, QColor("#0078D7")); p.setColor(QPalette.HighlightedText, Qt.white); p.setColor(QPalette.Disabled, QPalette.Text, QColor("#A0A0A0")); p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#A0A0A0")); return p
     def _get_light_stylesheet(self): 
         return """
-            QWidget{color:#000000;font-size:9pt}
-            QGroupBox{font-weight:bold;border:1px solid #C0C0C0;border-radius:6px;margin-top:1ex;background-color:#F0F0F0}
-            QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#F0F0F0}
-            QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #C0C0C0;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #FDFDFD,stop:1 #E8E8E8)}
-            QPushButton:hover{background-color:#E0E8F0;border:1px solid #0078D7}
-            QPushButton:pressed{background-color:#D8E0E8}
-            QPushButton:disabled{color:#A0A0A0;background-color:#E8E8E8;border:1px solid #D0D0D0}
-            QTabWidget::pane{border-top:2px solid #C0C0C0}
-            QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#E8E8E8;border:1px solid #C0C0C0;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px}
-            QTabBar::tab:selected{background-color:#FFFFFF;border:1px solid #0078D7;border-bottom-color:#FFFFFF}
-            QTabBar::tab:!selected:hover{background-color:#F0F8FF}
-            QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit{border-radius:4px;border:1px solid #C0C0C0;padding:4px;background-color:#FFFFFF}
-            QPlainTextEdit{border-radius:4px;border:1px solid #C0C0C0;padding:4px;background-color:#F8FFF8;color:#006400;font-family:Consolas,monospace}
-            QSlider::groove:horizontal{border:1px solid #C0C0C0;height:8px;background:#E8E8E8;border-radius:4px}
-            QSlider::handle:horizontal{background:#0078D7;border:1px solid #0078D7;width:18px;margin:-2px 0;border-radius:9px}
-            QHeaderView::section{background-color:#E0E0E0;color:#000000;padding:4px;border:1px solid #C0C0C0;font-weight:bold}
+            QWidget{color:#000000;font-size:9pt} QGroupBox{font-weight:bold;border:1px solid #C0C0C0;border-radius:6px;margin-top:1ex;background-color:#F0F0F0} QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#F0F0F0} QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #C0C0C0;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #FDFDFD,stop:1 #E8E8E8)} QPushButton:hover{background-color:#E0E8F0;border:1px solid #0078D7} QPushButton:pressed{background-color:#D8E0E8} QPushButton:disabled{color:#A0A0A0;background-color:#E8E8E8;border:1px solid #D0D0D0} QTabWidget::pane{border-top:2px solid #C0C0C0} QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#E8E8E8;border:1px solid #C0C0C0;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px} QTabBar::tab:selected{background-color:#FFFFFF;border:1px solid #0078D7;border-bottom-color:#FFFFFF} QTabBar::tab:!selected:hover{background-color:#F0F8FF} QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit{border-radius:4px;border:1px solid #C0C0C0;padding:4px;background-color:#FFFFFF} QPlainTextEdit{border-radius:4px;border:1px solid #C0C0C0;padding:4px;background-color:#F8FFF8;color:#006400;font-family:Consolas,monospace} QSlider::groove:horizontal{border:1px solid #C0C0C0;height:8px;background:#E8E8E8;border-radius:4px} QSlider::handle:horizontal{background:#0078D7;border:1px solid #0078D7;width:18px;margin:-2px 0;border-radius:9px} QHeaderView::section{background-color:#E0E0E0;color:#000000;padding:4px;border:1px solid #C0C0C0;font-weight:bold}
         """
     #</editor-fold>
     
     #<editor-fold desc="Configuration Management">
     def _load_config_or_prompt(self):
         config = {}
-        if os.path.exists(CONFIG_FILE):
+        local_config_path = os.path.join(os.path.abspath("."), 'dsd-fme-gui-config.json')
+        target_config_file = local_config_path if os.path.exists(local_config_path) else CONFIG_FILE
+
+        if os.path.exists(target_config_file):
             try:
-                with open(CONFIG_FILE, 'r') as f: config = json.load(f)
+                with open(target_config_file, 'r') as f: config = json.load(f)
             except json.JSONDecodeError: pass
         
         self.current_theme_name = config.get('current_theme', "Default (Kameleon Dark)")
         
         path = config.get('dsd_fme_path')
         if path and os.path.exists(path): return path
+        
+        local_dsd_path = os.path.join(os.path.abspath("."), 'dsd-fme.exe')
+        if os.path.exists(local_dsd_path):
+            path = local_dsd_path
+            config_to_save = {'dsd_fme_path': path, 'current_theme': self.current_theme_name}
+            with open(CONFIG_FILE, 'w') as f: json.dump(config_to_save, f, indent=4)
+            return path
+
         QMessageBox.information(self, "Setup", "Please locate your 'dsd-fme.exe' file.")
         path, _ = QFileDialog.getOpenFileName(self, "Select dsd-fme.exe", "", "Executable Files (dsd-fme.exe dsd-fme)")
         if path and ("dsd-fme" in os.path.basename(path).lower()):
@@ -272,13 +464,18 @@ class DSDApp(QMainWindow):
         
         ui_settings = config.get('ui_settings', {})
         for key, value in ui_settings.items():
-            if key in self.widgets:
+            if key.startswith('eq_band_'):
+                band_index = int(key.split('_')[-1])
+                if hasattr(self, 'eq_sliders') and band_index < len(self.eq_sliders):
+                    self.eq_sliders[band_index].setValue(value)
+            elif key in self.widgets:
                 widget = self.widgets[key]
                 try:
                     if isinstance(widget, QCheckBox): widget.setChecked(value)
                     elif isinstance(widget, QLineEdit): widget.setText(value)
                     elif isinstance(widget, QComboBox): widget.setCurrentText(value)
-                    elif isinstance(widget, QSpinBox): widget.setValue(value)
+                    elif isinstance(widget, QSpinBox): widget.setValue(int(value))
+                    elif isinstance(widget, QSlider): widget.setValue(int(value))
                 except Exception as e:
                     print(f"Warning: Could not load UI setting for '{key}': {e}")
         
@@ -294,8 +491,13 @@ class DSDApp(QMainWindow):
                 elif isinstance(widget, QLineEdit): ui_settings[key] = widget.text()
                 elif isinstance(widget, QComboBox): ui_settings[key] = widget.currentText()
                 elif isinstance(widget, QSpinBox): ui_settings[key] = widget.value()
+                elif isinstance(widget, QSlider): ui_settings[key] = widget.value()
             except Exception: pass
         
+        if hasattr(self, 'eq_sliders'):
+            for i, slider in enumerate(self.eq_sliders):
+                ui_settings[f'eq_band_{i}'] = slider.value()
+
         if hasattr(self, 'recorder_dir_edit'): ui_settings['recorder_dir_edit'] = self.recorder_dir_edit.text()
         if hasattr(self, 'volume_slider'): ui_settings['volume_slider'] = self.volume_slider.value()
 
@@ -311,7 +513,7 @@ class DSDApp(QMainWindow):
     def reset_all_settings(self):
         reply = QMessageBox.warning(self, "Reset Settings",
                                     "Are you sure you want to reset ALL application settings?\n"
-                                    "This will delete configuration and alias files.\n"
+                                    "This will delete configuration and alias files from AppData.\n"
                                     "The application will close.",
                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
@@ -367,7 +569,9 @@ class DSDApp(QMainWindow):
         container_layout = QVBoxLayout(options_container_widget)
         options_tabs = QTabWidget(); container_layout.addWidget(options_tabs)
         options_tabs.tabBar().setExpanding(True)
-        options_tabs.addTab(self._create_io_tab(), "Input / Output"); options_tabs.addTab(self._create_decoder_tab(), "Decoder Modes"); options_tabs.addTab(self._create_advanced_tab(), "Advanced & Crypto"); options_tabs.addTab(self._create_trunking_tab(), "Trunking")
+        options_tabs.addTab(self._create_io_tab(), "Input / Output"); options_tabs.addTab(self._create_decoder_tab(), "Decoder Modes")
+        options_tabs.addTab(self._create_advanced_tab(), "Advanced & Crypto"); options_tabs.addTab(self._create_trunking_tab(), "Trunking")
+        
         cmd_group = QGroupBox("Execution"); cmd_layout = QGridLayout(cmd_group)
         self.cmd_preview = self._add_widget('cmd_preview', QLineEdit()); self.cmd_preview.setReadOnly(False); self.cmd_preview.setFont(QFont("Consolas", 9))
         self.btn_build_cmd = QPushButton("Generate Command"); self.btn_build_cmd.clicked.connect(self.build_command)
@@ -387,57 +591,124 @@ class DSDApp(QMainWindow):
         return config_widget
 
     def _create_dashboard_tab(self):
-        widget = QWidget(); main_layout = QHBoxLayout(widget); main_splitter = QSplitter(Qt.Horizontal)
-        self.imv = pg.ImageView(); self.imv.ui.roiBtn.hide(); self.imv.ui.menuBtn.hide(); self.imv.ui.histogram.hide()
-        self.colormaps = {
-            "Amber Alert": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,0,0),(150,80,0),(255,170,0)]), "Night Mode (Red)": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,0,0),(130,0,0),(255,50,50)]),
-            "Inferno (High Contrast)": pg.ColorMap(pos=np.linspace(0.0,1.0,4),color=[(0,0,0),(120,0,0),(255,100,0),(255,255,100)]), "Oceanic (Blue)": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,0,20),(0,80,130),(100,200,200)]),
-            "Grayscale (Mono)": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,0,0),(128,128,128),(255,255,255)]), "Military Green": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,0,0),(0,120,0),(0,255,0)]),
-            "Night Vision": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,20,0),(0,180,80),(100,255,150)]), "Arctic Blue": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,0,0),(0,0,150),(100,180,255)])
-        }
+        widget = QWidget()
+        main_layout = QHBoxLayout(widget)
+        main_splitter = QSplitter(Qt.Horizontal)
+        main_layout.addWidget(main_splitter)
+
+        left_panel_widget = QWidget()
+        left_panel_layout = QVBoxLayout(left_panel_widget)
+        left_panel_splitter = QSplitter(Qt.Vertical)
+        
+        self.histogram = pg.HistogramLUTWidget()
+        left_panel_splitter.addWidget(self.histogram)
+
+        self.mini_logbook_table = QTableWidget()
+        self.mini_logbook_table.setColumnCount(6)
+        self.mini_logbook_table.setHorizontalHeaderLabels(["Start", "End", "Duration", "TG", "ID", "CC"])
+        self.mini_logbook_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.mini_logbook_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.mini_logbook_table.verticalHeader().setVisible(False)
+        left_panel_splitter.addWidget(self.mini_logbook_table)
+        left_panel_layout.addWidget(left_panel_splitter)
+
+        right_panel_widget = QWidget()
+        right_panel_layout = QVBoxLayout(right_panel_widget)
+        
+        top_bottom_splitter = QSplitter(Qt.Vertical)
+        right_panel_layout.addWidget(top_bottom_splitter)
+
+        visuals_widget = QWidget()
+        visuals_layout = QHBoxLayout(visuals_widget)
+        visuals_splitter = QSplitter(Qt.Horizontal)
+        
+        self.imv = pg.ImageView()
+        self.imv.ui.roiBtn.hide()
+        self.imv.ui.menuBtn.hide()
+        self.imv.ui.histogram.hide()
+        self.histogram.setImageItem(self.imv.imageItem)
+        visuals_splitter.addWidget(self.imv)
+        
+        self.scope_widget = pg.PlotWidget(title="")
+        self.scope_widget.getAxis('left').setWidth(50)
+        self.scope_curve = self.scope_widget.plot()
+        self.scope_widget.setYRange(-32768, 32767)
+        visuals_splitter.addWidget(self.scope_widget)
+        
+        visuals_layout.addWidget(visuals_splitter)
+        top_bottom_splitter.addWidget(visuals_widget)
+
+        bottom_area = QSplitter(Qt.Horizontal)
+        
+        controls_and_stats_widget = QWidget()
+        controls_and_stats_layout = QVBoxLayout(controls_and_stats_widget)
+        self.live_analysis_group_dash = self._create_live_analysis_group(self.live_labels_dash)
+        audio_controls_group_dash = self._create_audio_controls_group(is_dashboard=True)
+        controls_and_stats_layout.addWidget(self.live_analysis_group_dash)
+        controls_and_stats_layout.addWidget(audio_controls_group_dash)
+        controls_and_stats_layout.addStretch()
+        bottom_area.addWidget(controls_and_stats_widget)
+
+        self.terminal_output_dash = QPlainTextEdit()
+        self.terminal_output_dash.setReadOnly(True)
+        bottom_area.addWidget(self.terminal_output_dash)
+        
+        top_bottom_splitter.addWidget(bottom_area)
+
+        main_splitter.addWidget(left_panel_widget)
+        main_splitter.addWidget(right_panel_widget)
+
+        main_splitter.setSizes([300, 1300])
+        top_bottom_splitter.setSizes([600, 300])
+        visuals_splitter.setSizes([800, 500])
+        bottom_area.setSizes([500, 800])
+        
         self.spec_data = np.full((SPEC_WIDTH, CHUNK_SAMPLES // 2), MIN_DB, dtype=np.float32)
-        self.histogram = pg.HistogramLUTWidget(); self.histogram.setImageItem(self.imv.imageItem); self.histogram.item.gradient.loadPreset('viridis'); main_splitter.addWidget(self.histogram)
-        right_panel_splitter = QSplitter(Qt.Vertical); right_panel_splitter.addWidget(self.imv)
-        self.scope_widget = pg.PlotWidget(title=""); self.scope_widget.getAxis('left').setWidth(50)
-        self.scope_curve = self.scope_widget.plot(); self.scope_widget.setYRange(-32768, 32767); right_panel_splitter.addWidget(self.scope_widget)
-        bottom_area = QSplitter(Qt.Horizontal); left_panel_splitter = QSplitter(Qt.Vertical); controls_and_stats_widget = QWidget(); controls_and_stats_layout = QHBoxLayout(controls_and_stats_widget)
-        self.live_analysis_group_dash = self._create_live_analysis_group(self.live_labels_dash); audio_controls_group_dash = self._create_audio_controls_group(is_dashboard=True)
-        controls_and_stats_layout.addWidget(self.live_analysis_group_dash); controls_and_stats_layout.addWidget(audio_controls_group_dash); left_panel_splitter.addWidget(controls_and_stats_widget)
-        self.mini_logbook_table = QTableWidget(); self.mini_logbook_table.setColumnCount(6); self.mini_logbook_table.setHorizontalHeaderLabels(["Start", "End", "Duration", "TG", "ID", "CC"])
-        self.mini_logbook_table.setEditTriggers(QAbstractItemView.NoEditTriggers); self.mini_logbook_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch); self.mini_logbook_table.verticalHeader().setVisible(False); left_panel_splitter.addWidget(self.mini_logbook_table)
-        bottom_area.addWidget(left_panel_splitter)
-        self.terminal_output_dash = QPlainTextEdit(); self.terminal_output_dash.setReadOnly(True); bottom_area.addWidget(self.terminal_output_dash)
-        right_panel_splitter.addWidget(bottom_area); main_splitter.addWidget(right_panel_splitter)
-        main_splitter.setSizes([200, 1200]); right_panel_splitter.setSizes([450, 200, 300]); main_layout.addWidget(main_splitter)
+
         return widget
 
     def _create_audio_controls_group(self, is_dashboard=False):
-        group = QGroupBox("Audio & System Controls"); control_layout = QGridLayout(group)
+        group = QGroupBox("Audio & System Controls")
+        main_layout = QGridLayout(group)
+        
         self.device_combo = QComboBox(); self.populate_audio_devices()
         self.volume_slider = QSlider(Qt.Horizontal); self.volume_slider.setRange(0, 100)
         self.mute_check = QCheckBox("Mute"); self._add_widget('mute_check', self.mute_check)
-        self.lp_filter_check = QCheckBox("Low-pass"); self._add_widget('lp_filter_check', self.lp_filter_check)
-        self.hp_filter_check = QCheckBox("High-pass"); self._add_widget('hp_filter_check', self.hp_filter_check)
-        self.lp_cutoff_spin = QSpinBox(); self.lp_cutoff_spin.setRange(1000, 8000); self.lp_cutoff_spin.setSuffix(" Hz"); self._add_widget('lp_cutoff_spin', self.lp_cutoff_spin)
-        self.hp_cutoff_spin = QSpinBox(); self.hp_cutoff_spin.setRange(100, 1000); self.hp_cutoff_spin.setSuffix(" Hz"); self._add_widget('hp_cutoff_spin', self.hp_cutoff_spin)
-        self.rms_label = QLabel("RMS Level: --"); self.peak_freq_label = QLabel("Peak Freq: --")
-        row_idx = 0
-        control_layout.addWidget(QLabel("Audio Output:"), row_idx, 0); control_layout.addWidget(self.device_combo, row_idx, 1, 1, 2)
-        row_idx += 1; control_layout.addWidget(QLabel("Volume:"), row_idx, 0); control_layout.addWidget(self.volume_slider, row_idx, 1, 1, 2); control_layout.addWidget(self.mute_check, 0, 3)
-        row_idx += 1; control_layout.addWidget(self.hp_filter_check, row_idx, 0); control_layout.addWidget(self.hp_cutoff_spin, row_idx, 1); control_layout.addWidget(self.rms_label, row_idx, 2)
-        row_idx += 1; control_layout.addWidget(self.lp_filter_check, row_idx, 0); control_layout.addWidget(self.lp_cutoff_spin, row_idx, 1); control_layout.addWidget(self.peak_freq_label, row_idx, 2)
+        self.rms_label = QLabel("RMS: --"); self.peak_freq_label = QLabel("Peak Freq: --")
+        
+        main_layout.addWidget(QLabel("Audio Output:"), 0, 0); main_layout.addWidget(self.device_combo, 0, 1)
+        main_layout.addWidget(self.mute_check, 0, 2)
+        main_layout.addWidget(QLabel("Volume:"), 1, 0); main_layout.addWidget(self.volume_slider, 1, 1, 1, 2)
+        main_layout.addWidget(self.rms_label, 2, 0); main_layout.addWidget(self.peak_freq_label, 2, 1)
+
         if is_dashboard:
-            row_idx += 1; self.theme_combo = QComboBox(); self.theme_combo.addItems(self.themes.keys()); self.theme_combo.currentTextChanged.connect(self.apply_theme)
-            control_layout.addWidget(QLabel("Application Theme:"), row_idx, 0); control_layout.addWidget(self.theme_combo, row_idx, 1, 1, 2)
-            row_idx += 1; self.colormap_combo = QComboBox(); self.colormap_combo.addItems(self.colormaps.keys()); self.colormap_combo.currentTextChanged.connect(lambda name: self.imv.setColorMap(self.colormaps[name]))
-            control_layout.addWidget(QLabel("Spectrogram Theme:"), row_idx, 0); control_layout.addWidget(self.colormap_combo, row_idx, 1, 1, 2)
-            row_idx += 1; self.recorder_enabled_check_dash = QCheckBox("Enable Recording"); self.recorder_enabled_check_dash.toggled.connect(lambda state: self.recorder_enabled_check.setChecked(state)); self._add_widget('recorder_enabled_check_dash', self.recorder_enabled_check_dash)
-            control_layout.addWidget(self.recorder_enabled_check_dash, row_idx, 0, 1, 2)
-            row_idx += 1; self.btn_start_dash = QPushButton("START"); self.btn_start_dash.clicked.connect(self.start_process)
+            # --- ZMIANA 1: Przycisk otwierający Audio-Lab ---
+            self.audio_lab_btn = QPushButton("Open Audio-Lab")
+            self.audio_lab_btn.clicked.connect(self.open_audio_lab)
+            main_layout.addWidget(self.audio_lab_btn, 3, 0, 1, 3)
+
+            self.theme_combo = QComboBox(); self.theme_combo.addItems(self.themes.keys()); self.theme_combo.currentTextChanged.connect(self.apply_theme)
+            main_layout.addWidget(QLabel("Theme:"), 4, 0); main_layout.addWidget(self.theme_combo, 4, 1, 1, 2)
+            
+            self.colormap_combo = QComboBox(); self.colormap_combo.addItems(self.colormaps.keys()); self.colormap_combo.currentTextChanged.connect(lambda name: self.imv.setColorMap(self.colormaps[name]))
+            main_layout.addWidget(QLabel("Spectrogram:"), 5, 0); main_layout.addWidget(self.colormap_combo, 5, 1, 1, 2)
+
+            self.recorder_enabled_check_dash = QCheckBox("Enable Rec."); self.recorder_enabled_check_dash.toggled.connect(lambda state: self.recorder_enabled_check.setChecked(state)); self._add_widget('recorder_enabled_check_dash', self.recorder_enabled_check_dash)
+            main_layout.addWidget(self.recorder_enabled_check_dash, 6, 0)
+            
+            self.btn_start_dash = QPushButton("START"); self.btn_start_dash.clicked.connect(self.start_process)
             self.btn_stop_dash = QPushButton("STOP"); self.btn_stop_dash.setEnabled(False); self.btn_stop_dash.clicked.connect(self.stop_process)
-            control_layout.addWidget(self.btn_start_dash, row_idx, 0); control_layout.addWidget(self.btn_stop_dash, row_idx, 1)
-        self.device_combo.currentIndexChanged.connect(self.restart_audio_stream); self.volume_slider.valueChanged.connect(self.set_volume); return group
+            main_layout.addWidget(self.btn_start_dash, 6, 1); main_layout.addWidget(self.btn_stop_dash, 6, 2)
+
+        self.device_combo.currentIndexChanged.connect(self.restart_audio_stream); self.volume_slider.valueChanged.connect(self.set_volume)
+        return group
     
+    def open_audio_lab(self):
+        # Zainicjuj okno, jeśli jeszcze nie istnieje
+        if not hasattr(self, 'audio_lab_window'):
+            self.audio_lab_window = AudioProcessingWindow(self)
+        self.audio_lab_window.exec_() # Użyj exec_ dla modalnego okna
+
     def _create_alerts_tab(self):
         widget = QWidget(); layout = QGridLayout(widget)
         form_group = QGroupBox("Add/Edit Alert"); form_layout = QGridLayout(form_group)
@@ -757,21 +1028,43 @@ class DSDApp(QMainWindow):
 
     def _create_statistics_tab(self):
         widget = QWidget(); main_layout = QVBoxLayout(widget)
+        
         controls_group = QGroupBox("Report Generation"); controls_layout = QGridLayout(controls_group)
-        self.stats_start_date = QDateEdit(datetime.now().date()); self.stats_start_date.setCalendarPopup(True)
+        self.stats_start_date = QDateEdit(datetime.now().date().replace(day=1)); self.stats_start_date.setCalendarPopup(True)
         self.stats_end_date = QDateEdit(datetime.now().date()); self.stats_end_date.setCalendarPopup(True)
-        self.generate_report_btn = QPushButton("Generate Report"); self.generate_report_btn.clicked.connect(self.update_statistics)
-        controls_layout.addWidget(QLabel("Start Date:"), 0, 0); controls_layout.addWidget(self.stats_start_date, 0, 1); controls_layout.addWidget(QLabel("End Date:"), 0, 2); controls_layout.addWidget(self.stats_end_date, 0, 3)
-        controls_layout.addWidget(self.generate_report_btn, 0, 4, 1, 2); controls_layout.setColumnStretch(5, 1); main_layout.addWidget(controls_group)
+        self.generate_report_btn = QPushButton("Generate Report from Logbook"); self.generate_report_btn.clicked.connect(self.update_statistics)
+        self.export_stats_btn = QPushButton("Export Statistics"); self.export_stats_btn.clicked.connect(self.export_statistics)
+        self.import_stats_btn = QPushButton("Import Statistics"); self.import_stats_btn.clicked.connect(self.import_statistics)
+        
+        controls_layout.addWidget(QLabel("Start Date:"), 0, 0); controls_layout.addWidget(self.stats_start_date, 0, 1)
+        controls_layout.addWidget(QLabel("End Date:"), 0, 2); controls_layout.addWidget(self.stats_end_date, 0, 3)
+        controls_layout.addWidget(self.generate_report_btn, 1, 0, 1, 2)
+        controls_layout.addWidget(self.export_stats_btn, 1, 2)
+        controls_layout.addWidget(self.import_stats_btn, 1, 3)
+        controls_layout.setColumnStretch(4, 1); main_layout.addWidget(controls_group)
+        
         summary_group = QGroupBox("Summary"); self.summary_layout = QGridLayout(summary_group)
         self.total_calls_label = QLabel("---"); self.total_duration_label = QLabel("---"); self.most_active_tg_label = QLabel("---"); self.most_active_id_label = QLabel("---")
-        self.summary_layout.addWidget(QLabel("<b>Total Calls:</b>"), 0, 0); self.summary_layout.addWidget(self.total_calls_label, 0, 1); self.summary_layout.addWidget(QLabel("<b>Total Duration:</b>"), 1, 0); self.summary_layout.addWidget(self.total_duration_label, 1, 1)
-        self.summary_layout.addWidget(QLabel("<b>Most Active TG:</b>"), 0, 2); self.summary_layout.addWidget(self.most_active_tg_label, 0, 3); self.summary_layout.addWidget(QLabel("<b>Most Active ID:</b>"), 1, 2); self.summary_layout.addWidget(self.most_active_id_label, 1, 3)
+        self.summary_layout.addWidget(QLabel("<b>Total Calls:</b>"), 0, 0); self.summary_layout.addWidget(self.total_calls_label, 0, 1)
+        self.summary_layout.addWidget(QLabel("<b>Total Duration:</b>"), 1, 0); self.summary_layout.addWidget(self.total_duration_label, 1, 1)
+        self.summary_layout.addWidget(QLabel("<b>Most Active TG:</b>"), 0, 2); self.summary_layout.addWidget(self.most_active_tg_label, 0, 3)
+        self.summary_layout.addWidget(QLabel("<b>Most Active ID:</b>"), 1, 2); self.summary_layout.addWidget(self.most_active_id_label, 1, 3)
         self.summary_layout.setColumnStretch(1, 1); self.summary_layout.setColumnStretch(3, 1); main_layout.addWidget(summary_group)
+        
         splitter = QSplitter(Qt.Horizontal)
-        self.tg_chart = pg.PlotWidget(title="Top 10 Talkgroups by Call Count"); self.id_chart = pg.PlotWidget(title="Top 10 Radio IDs by Call Count"); self.time_chart = pg.PlotWidget(title="Calls per Hour")
-        splitter.addWidget(self.tg_chart); splitter.addWidget(self.id_chart); splitter.addWidget(self.time_chart); main_layout.addWidget(splitter)
+        integer_axis_left_tg = IntegerAxis(orientation='left')
+        integer_axis_left_id = IntegerAxis(orientation='left')
+        date_axis_bottom = DateAxisItem(orientation='bottom')
+        
+        self.tg_chart = pg.PlotWidget(title="Top 10 Talkgroups by Call Count", axisItems={'left': integer_axis_left_tg})
+        self.id_chart = pg.PlotWidget(title="Top 10 Radio IDs by Call Count", axisItems={'left': integer_axis_left_id})
+        self.time_chart = pg.PlotWidget(title="Calls over Time", axisItems={'bottom': date_axis_bottom})
+        self.time_chart.getAxis('left').setLabel('Call Count')
+
+        splitter.addWidget(self.tg_chart); splitter.addWidget(self.id_chart); splitter.addWidget(self.time_chart)
+        main_layout.addWidget(splitter)
         return widget
+
 
     def _create_recorder_tab(self):
         widget = QWidget(); layout = QGridLayout(widget)
@@ -810,9 +1103,15 @@ class DSDApp(QMainWindow):
         layout.addWidget(self.terminal_output_conf, 0, 0, 1, 2); layout.addWidget(self.search_input, 1, 0); layout.addWidget(self.search_button, 1, 1)
         return group
 
-    def _add_widget(self, key, widget):
+    def _add_widget(self, key, widget, properties=None):
         self.widgets[key] = widget
         if isinstance(widget, QRadioButton): self.inverse_widgets[widget] = key
+        
+        if properties:
+            if 'range' in properties: widget.setRange(*properties['range'])
+            if 'suffix' in properties: widget.setSuffix(properties['suffix'])
+            if 'value' in properties: widget.setValue(properties['value'])
+
         return widget
 
     def _create_browse_button(self, line_edit_widget, is_dir=False): button = QPushButton("Browse..."); button.clicked.connect(lambda: self._browse_for_path(line_edit_widget, is_dir)); return button
@@ -1010,21 +1309,40 @@ class DSDApp(QMainWindow):
         clean_num_bytes = (len(raw_data) // np.dtype(AUDIO_DTYPE).itemsize) * np.dtype(AUDIO_DTYPE).itemsize
         if clean_num_bytes == 0: return
         audio_samples = np.frombuffer(raw_data[:clean_num_bytes], dtype=AUDIO_DTYPE)
+        
         if self.is_recording and self.wav_file: self.wav_file.writeframes(audio_samples.tobytes())
+        
         filtered_samples = self.apply_filters(audio_samples.copy())
+        
         if not self.mute_check.isChecked() and self.output_stream:
-            try: self.output_stream.write((filtered_samples * self.volume).astype(AUDIO_DTYPE))
-            except Exception: pass
-        self.scope_curve.setData(audio_samples)
+            try:
+                output_data = (filtered_samples * self.volume).astype(AUDIO_DTYPE)
+                self.output_stream.write(output_data)
+            except Exception as e:
+                pass
+                
+        if hasattr(self, 'scope_curve'): self.scope_curve.setData(audio_samples)
+        
         audio_samples_float = audio_samples.astype(np.float32) / 32768.0
-        self.rms_label.setText(f"RMS Level: {np.sqrt(np.mean(audio_samples_float**2)):.4f}")
-        if len(audio_samples_float) < CHUNK_SAMPLES: audio_samples_float = np.pad(audio_samples_float, (0, CHUNK_SAMPLES - len(audio_samples_float)))
+        
+        if hasattr(self, 'rms_label'):
+            self.rms_label.setText(f"RMS: {np.sqrt(np.mean(audio_samples_float**2)):.4f}")
+        
+        if len(audio_samples_float) < CHUNK_SAMPLES: 
+            audio_samples_float = np.pad(audio_samples_float, (0, CHUNK_SAMPLES - len(audio_samples_float)))
+            
         with np.errstate(divide='ignore', invalid='ignore'):
-            magnitude = np.abs(np.fft.fft(audio_samples_float)[:CHUNK_SAMPLES // 2]); log_magnitude = 20 * np.log10(magnitude + 1e-12)
+            magnitude = np.abs(np.fft.fft(audio_samples_float)[:CHUNK_SAMPLES // 2])
+            log_magnitude = 20 * np.log10(magnitude + 1e-12)
         log_magnitude = np.nan_to_num(log_magnitude, nan=MIN_DB, posinf=MAX_DB, neginf=MIN_DB)
-        self.peak_freq_label.setText(f"Peak Freq: {np.argmax(log_magnitude) * (AUDIO_RATE / CHUNK_SAMPLES):.0f} Hz")
-        self.spec_data = np.roll(self.spec_data, -1, axis=0); self.spec_data[-1, :] = log_magnitude
-        self.imv.setImage(np.rot90(self.spec_data), autoLevels=False, levels=(MIN_DB, MAX_DB))
+        
+        if hasattr(self, 'peak_freq_label'):
+            self.peak_freq_label.setText(f"Peak: {np.argmax(log_magnitude) * (AUDIO_RATE / CHUNK_SAMPLES):.0f} Hz")
+            
+        if hasattr(self, 'spec_data') and hasattr(self, 'imv'):
+            self.spec_data = np.roll(self.spec_data, -1, axis=0)
+            self.spec_data[-1, :] = log_magnitude
+            self.imv.setImage(np.rot90(self.spec_data), autoLevels=False, levels=(MIN_DB, MAX_DB))
 
     def search_in_log(self):
         if self.terminal_output_conf.find(self.search_input.text()): return
@@ -1097,31 +1415,174 @@ class DSDApp(QMainWindow):
             if key: self.aliases[alias_type][key] = val
 
     def update_statistics(self):
-        start_date, end_date = self.stats_start_date.date().toPyDate(), self.stats_end_date.date().toPyDate()
-        tg_counts, id_counts, hour_counts, total_duration, filtered_rows = Counter(), Counter(), Counter(), timedelta(), 0
+        start_date = self.stats_start_date.date().toPyDate()
+        end_date = self.stats_end_date.date().toPyDate()
+        
+        tg_counts = Counter()
+        id_counts = Counter()
+        time_data = []
+        total_duration = timedelta()
+        filtered_rows = 0
+
         for row in range(self.logbook_table.rowCount()):
-            if self.logbook_table.isRowHidden(row): continue
+            date_item = self.logbook_table.item(row, 0)
+            if not date_item: continue
+            
+            try:
+                row_date = datetime.strptime(date_item.text(), "%Y-%m-%d %H:%M:%S").date()
+                if not (start_date <= row_date <= end_date):
+                    continue
+            except (ValueError, TypeError):
+                continue
+            
             filtered_rows += 1
-            tg_item, id_item = self.logbook_table.item(row, 3), self.logbook_table.item(row, 4)
-            if tg_item and tg_item.data(Qt.UserRole): tg_counts[tg_item.data(Qt.UserRole)] += 1
-            if id_item and id_item.data(Qt.UserRole): id_counts[id_item.data(Qt.UserRole)] += 1
-            if self.logbook_table.item(row, 0):
-                try: hour_counts[datetime.strptime(self.logbook_table.item(row, 0).text(), "%Y-%m-%d %H:%M:%S").hour] += 1
-                except ValueError: pass
-            if self.logbook_table.item(row, 2) and self.logbook_table.item(row, 2).text():
-                try: h,m,s = map(int, self.logbook_table.item(row, 2).text().split(':')); total_duration += timedelta(hours=h,minutes=m,seconds=s)
-                except: pass
-        self.total_calls_label.setText(f"<b>{filtered_rows}</b>"); self.total_duration_label.setText(f"<b>{total_duration}</b>")
-        self.most_active_tg_label.setText(f"<b>{self.aliases['tg'].get(tg_counts.most_common(1)[0][0], tg_counts.most_common(1)[0][0])}</b> ({tg_counts.most_common(1)[0][1]} calls)" if tg_counts else "---")
-        self.most_active_id_label.setText(f"<b>{self.aliases['id'].get(id_counts.most_common(1)[0][0], id_counts.most_common(1)[0][0])}</b> ({id_counts.most_common(1)[0][1]} calls)" if id_counts else "---")
-        for chart, data, alias_type in [(self.tg_chart, tg_counts.most_common(10), 'tg'), (self.id_chart, id_counts.most_common(10), 'id')]:
-            chart.clear();
-            if data:
-                labels = [self.aliases[alias_type].get(item[0], item[0]) for item in data]
-                bar = pg.BarGraphItem(x=range(len(data)), height=[item[1] for item in data], width=0.6, brush=self.palette().highlight().color())
-                chart.addItem(bar); chart.getAxis('bottom').setTicks([list(enumerate(labels))])
+            
+            tg_item = self.logbook_table.item(row, 3)
+            id_item = self.logbook_table.item(row, 4)
+            if tg_item and tg_item.data(Qt.UserRole): 
+                tg_counts[tg_item.data(Qt.UserRole)] += 1
+            if id_item and id_item.data(Qt.UserRole): 
+                id_counts[id_item.data(Qt.UserRole)] += 1
+            
+            try:
+                dt_obj = datetime.strptime(date_item.text(), "%Y-%m-%d %H:%M:%S")
+                time_data.append(dt_obj.timestamp())
+            except (ValueError, TypeError):
+                pass
+                
+            duration_item = self.logbook_table.item(row, 2)
+            if duration_item and duration_item.text():
+                try: 
+                    h, m, s = map(int, duration_item.text().split(':'))
+                    total_duration += timedelta(hours=h, minutes=m, seconds=s)
+                except ValueError: 
+                    pass
+        
+        stats_data = {
+            "summary": {
+                "total_calls": filtered_rows,
+                "total_duration": str(total_duration),
+                "most_active_tg": tg_counts.most_common(1)[0] if tg_counts else ("N/A", 0),
+                "most_active_id": id_counts.most_common(1)[0] if id_counts else ("N/A", 0),
+            },
+            "tg_chart": tg_counts.most_common(10),
+            "id_chart": id_counts.most_common(10),
+            "time_chart": sorted(time_data)
+        }
+        
+        self.display_statistics(stats_data)
+
+    def display_statistics(self, data):
+        summary = data.get("summary", {})
+        self.total_calls_label.setText(f"<b>{summary.get('total_calls', '---')}</b>")
+        self.total_duration_label.setText(f"<b>{summary.get('total_duration', '---')}</b>")
+
+        tg_info = summary.get('most_active_tg')
+        if tg_info and tg_info[1] > 0:
+            tg_alias = self.aliases['tg'].get(tg_info[0], tg_info[0])
+            self.most_active_tg_label.setText(f"<b>{tg_alias}</b> ({tg_info[1]} calls)")
+        else:
+            self.most_active_tg_label.setText("---")
+
+        id_info = summary.get('most_active_id')
+        if id_info and id_info[1] > 0:
+            id_alias = self.aliases['id'].get(id_info[0], id_info[0])
+            self.most_active_id_label.setText(f"<b>{id_alias}</b> ({id_info[1]} calls)")
+        else:
+            self.most_active_id_label.setText("---")
+
+        for chart, chart_data, alias_type in [(self.tg_chart, data.get("tg_chart", []), 'tg'), (self.id_chart, data.get("id_chart", []), 'id')]:
+            chart.clear()
+            if chart_data:
+                labels = [self.aliases[alias_type].get(item[0], item[0]) for item in chart_data]
+                counts = [item[1] for item in chart_data]
+                
+                bar = pg.BarGraphItem(x=range(len(counts)), height=counts, width=0.6, brush=self.palette().highlight().color())
+                chart.addItem(bar)
+                
+                ax = chart.getAxis('bottom')
+                ax.setTicks([list(enumerate(labels))])
+                chart.getAxis('left').setGrid(128)
+
         self.time_chart.clear()
-        if hour_counts: hours, counts = zip(*sorted(hour_counts.items())); self.time_chart.plot(list(hours), list(counts), pen=pg.mkPen(color=self.palette().highlight().color(), width=2), symbol='o', symbolBrush=self.palette().highlight().color())
+        time_data_points = data.get("time_chart", [])
+        if time_data_points:
+            y, x = np.histogram(time_data_points, bins=100)
+            self.time_chart.plot(x, y, stepMode=True, fillLevel=0, brush=(0,0,255,150), pen=pg.mkPen(color=self.palette().highlight().color(), width=2))
+        self.time_chart.getAxis('left').setGrid(128)
+        self.time_chart.getAxis('bottom').setGrid(128)
+        
+    def export_statistics(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Export Statistics", "", "JSON Files (*.json)")
+        if not path:
+            return
+            
+        try:
+            tg_data = []
+            if self.tg_chart.items:
+                bar_item = self.tg_chart.items[0]
+                ticks = self.tg_chart.getAxis('bottom').ticks[0]
+                for i, height in enumerate(bar_item.opts['height']):
+                    alias = ticks[i][1]
+                    original_id = next((k for k, v in self.aliases['tg'].items() if v == alias), alias)
+                    tg_data.append((original_id, height))
+
+            id_data = []
+            if self.id_chart.items:
+                bar_item = self.id_chart.items[0]
+                ticks = self.id_chart.getAxis('bottom').ticks[0]
+                for i, height in enumerate(bar_item.opts['height']):
+                    alias = ticks[i][1]
+                    original_id = next((k for k, v in self.aliases['id'].items() if v == alias), alias)
+                    id_data.append((original_id, height))
+
+            time_data = []
+            if self.time_chart.items:
+                plot_item = self.time_chart.items[0]
+                x_data = plot_item.xData
+                time_data = list(x_data) if x_data is not None else []
+                
+            stats_to_save = {
+                "summary": {
+                    "total_calls": int(self.total_calls_label.text().strip("<b></b>")),
+                    "total_duration": self.total_duration_label.text().strip("<b></b>"),
+                    "most_active_tg": self.most_active_tg_label.text().strip("<b></b>"),
+                    "most_active_id": self.most_active_id_label.text().strip("<b></b>"),
+                },
+                "tg_chart": tg_data,
+                "id_chart": id_data,
+                "time_chart": time_data,
+                "exported_at": datetime.now().isoformat()
+            }
+
+            with open(path, 'w') as f:
+                json.dump(stats_to_save, f, indent=4)
+            QMessageBox.information(self, "Success", "Statistics have been exported.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not export statistics: {e}")
+
+    def import_statistics(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Import Statistics", "", "JSON Files (*.json)")
+        if not path:
+            return
+            
+        try:
+            with open(path, 'r') as f:
+                stats_data = json.load(f)
+            
+            summary = stats_data.get("summary", {})
+            most_tg_str = summary.get("most_active_tg", "N/A (0 calls)")
+            most_id_str = summary.get("most_active_id", "N/A (0 calls)")
+            
+            summary['most_active_tg'] = (most_tg_str.split(' (')[0], int(most_tg_str.split('(')[-1].replace(' calls)', ''))) if '(' in most_tg_str else (most_tg_str, 0)
+            summary['most_active_id'] = (most_id_str.split(' (')[0], int(most_id_str.split('(')[-1].replace(' calls)', ''))) if '(' in most_id_str else (most_id_str, 0)
+
+            stats_data['summary'] = summary
+            
+            self.display_statistics(stats_data)
+            QMessageBox.information(self, "Success", "Statistics have been imported.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not import statistics file: {e}\nThe file may be corrupted or in a wrong format.")
 
     def browse_for_recording_dir(self):
         path = QFileDialog.getExistingDirectory(self, "Select Recording Directory")
@@ -1221,21 +1682,89 @@ class DSDApp(QMainWindow):
 
     def restart_audio_stream(self):
         if self.output_stream: self.output_stream.stop(); self.output_stream.close()
+        self.filter_states.clear()
         try:
-            self.output_stream = sd.OutputStream(samplerate=AUDIO_RATE, device=self.device_combo.currentData(), channels=1, dtype=AUDIO_DTYPE); self.output_stream.start()
+            self.output_stream = sd.OutputStream(samplerate=AUDIO_RATE, device=self.device_combo.currentData(), channels=1, dtype=AUDIO_DTYPE, blocksize=CHUNK_SAMPLES); self.output_stream.start()
         except Exception as e: print(f"Error opening audio stream: {e}")
 
     def set_volume(self, value): self.volume = value / 100.0
 
     def apply_filters(self, samples):
-        if self.hp_filter_check.isChecked():
-            b, a = signal.butter(4, self.hp_cutoff_spin.value(), 'highpass', fs=AUDIO_RATE)
-            if self.filter_hp_state is None: self.filter_hp_state = signal.lfilter_zi(b,a)
-            samples, self.filter_hp_state = signal.lfilter(b, a, samples, zi=self.filter_hp_state)
-        if self.lp_filter_check.isChecked():
-            b, a = signal.butter(4, self.lp_cutoff_spin.value(), 'lowpass', fs=AUDIO_RATE)
-            if self.filter_lp_state is None: self.filter_lp_state = signal.lfilter_zi(b,a)
-            samples, self.filter_lp_state = signal.lfilter(b, a, samples, zi=self.filter_lp_state)
+        samples = samples.astype(np.float32)
+
+        if self.rnnoise_denoiser and self.widgets["rnnoise_check"].isChecked():
+            samples = self.rnnoise_denoiser.filter(samples)
+
+        if self.widgets['agc_check'].isChecked():
+            strength = self.widgets['agc_strength_slider'].value() / 100.0
+            target_rms = 0.1
+            
+            current_rms = np.sqrt(np.mean(samples**2))
+            if current_rms > 1e-5:
+                gain = target_rms / current_rms
+                gain = np.clip(gain, 0.1, 10.0)
+                if 'agc_gain' not in self.filter_states: self.filter_states['agc_gain'] = 1.0
+                self.filter_states['agc_gain'] = (1.0 - strength) * self.filter_states['agc_gain'] + strength * gain
+                samples *= self.filter_states['agc_gain']
+
+        if self.widgets["hp_filter_check"].isChecked():
+            cutoff = self.widgets["hp_cutoff_spin"].value()
+            b, a = signal.butter(4, cutoff, 'highpass', fs=AUDIO_RATE)
+            if 'hp_filter' not in self.filter_states: self.filter_states['hp_filter'] = signal.lfilter_zi(b,a)
+            samples, self.filter_states['hp_filter'] = signal.lfilter(b, a, samples, zi=self.filter_states['hp_filter'])
+            
+        if self.widgets["lp_filter_check"].isChecked():
+            cutoff = self.widgets["lp_cutoff_spin"].value()
+            b, a = signal.butter(4, cutoff, 'lowpass', fs=AUDIO_RATE)
+            if 'lp_filter' not in self.filter_states: self.filter_states['lp_filter'] = signal.lfilter_zi(b,a)
+            samples, self.filter_states['lp_filter'] = signal.lfilter(b, a, samples, zi=self.filter_states['lp_filter'])
+
+        if self.widgets["bp_filter_check"].isChecked():
+            low = self.widgets["bp_center_spin"].value() - self.widgets["bp_width_spin"].value() / 2
+            high = self.widgets["bp_center_spin"].value() + self.widgets["bp_width_spin"].value() / 2
+            b, a = signal.butter(4, [low, high], 'bandpass', fs=AUDIO_RATE)
+            if 'bp_filter' not in self.filter_states: self.filter_states['bp_filter'] = signal.lfilter_zi(b,a)
+            samples, self.filter_states['bp_filter'] = signal.lfilter(b, a, samples, zi=self.filter_states['bp_filter'])
+
+        if self.widgets["notch_filter_check"].isChecked():
+            freq = self.widgets["notch_freq_spin"].value()
+            q = self.widgets["notch_q_spin"].value()
+            b, a = signal.iirnotch(freq, q, fs=AUDIO_RATE)
+            if 'notch_filter' not in self.filter_states: self.filter_states['notch_filter'] = signal.lfilter_zi(b,a)
+            samples, self.filter_states['notch_filter'] = signal.lfilter(b, a, samples, zi=self.filter_states['notch_filter'])
+            
+        if hasattr(self, 'eq_sliders'):
+            eq_bands = [60, 170, 310, 600, 1000, 3000, 6000, 12000]
+            for i, slider in enumerate(self.eq_sliders):
+                gain_db = slider.value()
+                if gain_db != 0:
+                    center_freq = eq_bands[i]
+                    q_factor = 3.0 
+                    b, a = signal.iirpeak(center_freq, q_factor, fs=AUDIO_RATE)
+                    gain_lin = 10 ** (gain_db / 20.0)
+                    b = b * gain_lin
+                    
+                    filter_name = f'eq_filter_{i}'
+                    if filter_name not in self.filter_states: self.filter_states[filter_name] = signal.lfilter_zi(b, a)
+                    samples, self.filter_states[filter_name] = signal.lfilter(b, a, samples, zi=self.filter_states[filter_name])
+                    
+        if self.widgets['nr_check'].isChecked():
+            strength = self.widgets['nr_strength_slider'].value() / 100.0
+            
+            spec = np.fft.fft(samples)
+            mag = np.abs(spec)
+            phase = np.angle(spec)
+            
+            if 'noise_profile' not in self.filter_states:
+                self.filter_states['noise_profile'] = np.mean(mag) 
+            
+            self.filter_states['noise_profile'] = (1 - 0.01) * self.filter_states['noise_profile'] + 0.01 * np.mean(mag)
+            
+            mag_denoised = np.maximum(0, mag - self.filter_states['noise_profile'] * strength)
+            spec_denoised = mag_denoised * np.exp(1j * phase)
+            samples = np.fft.ifft(spec_denoised).real
+
+        np.clip(samples, -32767, 32767, out=samples)
         return samples.astype(AUDIO_DTYPE)
     #</editor-fold>
 
@@ -1243,6 +1772,45 @@ if __name__ == '__main__':
     if hasattr(Qt, 'AA_EnableHighDpiScaling'): QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     if hasattr(Qt, 'AA_UseHighDpiPixmaps'): QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     
+    if not os.path.exists('rnn_wrapper.py') and not RNN_AVAILABLE:
+        try:
+            with open('rnn_wrapper.py', 'w') as f:
+                f.write("""
+import numpy as np
+try:
+    from rnnoise_wrapper import RNNoise as RNNoiseCore
+    RNN_CORE_AVAILABLE = True
+except ImportError:
+    RNN_CORE_AVAILABLE = False
+
+class RNNoise:
+    def __init__(self):
+        if not RNN_CORE_AVAILABLE:
+            self.denoiser = None
+            print("Biblioteka 'rnnoise-wrapper' nie jest zainstalowana. RNNoise jest niedostępne.")
+            return
+        self.denoiser = RNNoiseCore()
+
+    def filter(self, audio_chunk_float32):
+        if not self.denoiser:
+            return (audio_chunk_float32 * 32767.0).astype(np.int16)
+
+        processed_audio = np.array([], dtype=np.float32)
+        for i in range(0, len(audio_chunk_float32), 480):
+            chunk = audio_chunk_float32[i:i+480]
+            if len(chunk) < 480:
+                chunk = np.pad(chunk, (0, 480 - len(chunk)), 'constant')
+            
+            denoised_chunk = np.array(self.denoiser.filter(chunk), dtype=np.float32)
+            processed_audio = np.append(processed_audio, denoised_chunk)
+        
+        return processed_audio[:len(audio_chunk_float32)]
+""")
+            print("Utworzono plik 'rnn_wrapper.py'. Proszę zainstalować 'rnnoise-wrapper' (`pip install rnnoise-wrapper`) aby używać RNNoise.")
+        except Exception as e:
+            print(f"Nie udało się utworzyć pliku rnn_wrapper.py: {e}")
+
+
     app = QApplication(sys.argv)
     
     main_window = DSDApp()
@@ -1252,4 +1820,3 @@ if __name__ == '__main__':
         sys.exit(app.exec_())
     else:
         sys.exit(0)
-
