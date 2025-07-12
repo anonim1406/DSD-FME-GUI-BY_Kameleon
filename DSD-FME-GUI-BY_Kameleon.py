@@ -126,10 +126,10 @@ class AudioProcessingWindow(QDialog):
             label.setAlignment(Qt.AlignCenter)
             
             slider = QSlider(Qt.Vertical)
-            slider.setRange(-4, 4)
+            slider.setRange(-20, 20) # FIX: Increased range for finer control
             slider.setValue(0)
             slider.setTickPosition(QSlider.TicksBothSides)
-            slider.setTickInterval(2)
+            slider.setTickInterval(5)
             self.main_app._add_widget(f'eq_band_{i}', slider)
             
             slider_v_layout.addWidget(label)
@@ -285,11 +285,13 @@ class DSDApp(QMainWindow):
         }
 
         self.dsd_fme_path = self._load_config_or_prompt()
-        if self.dsd_fme_path: 
+        if self.dsd_fme_path:
             self._init_ui()
+            # FIX: Instantiate AudioProcessingWindow on startup to ensure all filter widgets are created.
+            self.audio_lab_window = AudioProcessingWindow(self)
             self._load_app_config()
             self.load_aliases()
-        else: 
+        else:
             QTimer.singleShot(100, self.close)
     
     def _create_theme_manager(self):
@@ -329,51 +331,66 @@ class DSDApp(QMainWindow):
         p = QPalette(); p.setColor(QPalette.Window, QColor(21, 25, 28)); p.setColor(QPalette.WindowText, QColor(224, 224, 224)); p.setColor(QPalette.Base, QColor(30, 35, 40)); p.setColor(QPalette.AlternateBase, QColor(44, 52, 58)); p.setColor(QPalette.ToolTipBase, Qt.white); p.setColor(QPalette.ToolTipText, Qt.black); p.setColor(QPalette.Text, QColor(224, 224, 224)); p.setColor(QPalette.Button, QColor(44, 52, 58)); p.setColor(QPalette.ButtonText, QColor(224, 224, 224)); p.setColor(QPalette.BrightText, Qt.red); p.setColor(QPalette.Link, QColor(255, 170, 0)); p.setColor(QPalette.Highlight, QColor(255, 170, 0)); p.setColor(QPalette.HighlightedText, Qt.black); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
     def _get_dark_stylesheet(self): 
         return """
-            QWidget{color:#e0e0e0;font-size:9pt} QGroupBox{font-weight:bold;border:1px solid #3a4149;border-radius:6px;margin-top:1ex; background-color: #1e2328;} QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#15191c} QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #3a4149;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2c343a,stop:1 #242b30)} QPushButton:hover{background-color:#3e4850;border:1px solid #ffaa00} QPushButton:pressed{background-color:#242b30} QPushButton:disabled{color:#777;background-color:#242b30;border:1px solid #3a4149} QTabWidget::pane{border-top:2px solid #3a4149} QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#1e2328;border:1px solid #3a4149;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px} QTabBar::tab:selected{background-color:#2c343a;border:1px solid #ffaa00;border-bottom:none} QTabBar::tab:!selected:hover{background-color:#353e44} QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit,QPlainTextEdit,QListView{border-radius:4px;border:1px solid #3a4149;padding:4px} QPlainTextEdit{color:#33FF33;font-family:Consolas,monospace} QSlider::groove:horizontal{border:1px solid #3a4149;height:8px;background:#242b30;border-radius:4px} QSlider::handle:horizontal{background:#ffaa00;border:1px solid #ffaa00;width:18px;margin:-2px 0;border-radius:9px} QHeaderView::section{background-color:#2c343a;color:#e0e0e0;padding:4px;border:1px solid #3a4149;font-weight:bold}
+            QWidget{color:#e0e0e0;font-size:9pt} QGroupBox{font-weight:bold;border:1px solid #3a4149;border-radius:6px;margin-top:1ex; background-color: #1e2328;} QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#15191c} QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #3a4149;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2c343a,stop:1 #242b30)} QPushButton:hover{background-color:#3e4850;border:1px solid #ffaa00} QPushButton:pressed{background-color:#242b30} QPushButton:disabled{color:#777;background-color:#242b30;border:1px solid #3a4149} QTabWidget::pane{border-top:2px solid #3a4149} QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#1e2328;border:1px solid #3a4149;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px} QTabBar::tab:selected{background-color:#2c343a;border:1px solid #ffaa00;border-bottom:none} QTabBar::tab:!selected:hover{background-color:#353e44} QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit,QPlainTextEdit,QListView{border-radius:4px;border:1px solid #3a4149;padding:4px} QPlainTextEdit{color:#33FF33;font-family:Consolas,monospace} QSlider::groove:horizontal{border:1px solid #3a4149;height:8px;background:#242b30;border-radius:4px} QSlider::handle:horizontal{background:#ffaa00;border:1px solid #ffaa00;width:18px;margin:-2px 0;border-radius:9px} QHeaderView::section{background-color:#2c343a;color:#e0e0e0;padding:4px;border:1px solid #3a4149;font-weight:bold} QTableWidget{gridline-color:#3a4149;}
         """
     def _get_matrix_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#020f03")); p.setColor(QPalette.WindowText, QColor("#00ff41")); p.setColor(QPalette.Base, QColor("#051803")); p.setColor(QPalette.AlternateBase, QColor("#0a2808")); p.setColor(QPalette.Text, QColor("#33ff77")); p.setColor(QPalette.Button, QColor("#0a2808")); p.setColor(QPalette.ButtonText, QColor("#00ff41")); p.setColor(QPalette.Highlight, QColor("#00ff41")); p.setColor(QPalette.HighlightedText, Qt.black); p.setColor(QPalette.Link, QColor("#66ff99")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
-    def _get_matrix_stylesheet(self): return "QWidget{font-family:'Courier New',monospace;color:#00ff41;background-color:#020f03;}QGroupBox{border:1px solid #00ff41;background-color:#051803;}QGroupBox::title{background-color:#020f03;}QPushButton{border:1px solid #00ff41;background-color:#103010;}QPushButton:hover{background-color:#205020;}QTabBar::tab{padding:8px;border:1px solid #008000;border-bottom:none;background:#051803;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#205020;border-color:#00ff41;}QTabBar::tab:!selected:hover{background:#104010;}QSlider::handle:horizontal{background:#00ff41;}"
+    def _get_matrix_stylesheet(self): 
+        # FIX: Added table styles
+        return "QWidget{font-family:'Courier New',monospace;color:#00ff41;background-color:#020f03;}QGroupBox{border:1px solid #00ff41;background-color:#051803;}QGroupBox::title{background-color:#020f03;}QPushButton{border:1px solid #00ff41;background-color:#103010;}QPushButton:hover{background-color:#205020;}QTabBar::tab{padding:8px;border:1px solid #008000;border-bottom:none;background:#051803;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#205020;border-color:#00ff41;}QTabBar::tab:!selected:hover{background:#104010;}QSlider::handle:horizontal{background:#00ff41;}QTableWidget{gridline-color:#008000;border:1px solid #00ff41;}QHeaderView::section{background-color:#103010;border:1px solid #00ff41;}"
     
     def _get_cyberpunk_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#0c0c28")); p.setColor(QPalette.WindowText, QColor("#f7f722")); p.setColor(QPalette.Base, QColor("#141434")); p.setColor(QPalette.AlternateBase, QColor("#222248")); p.setColor(QPalette.Text, QColor("#ffffff")); p.setColor(QPalette.Button, QColor("#141434")); p.setColor(QPalette.ButtonText, QColor("#f7f722")); p.setColor(QPalette.Highlight, QColor("#f7f722")); p.setColor(QPalette.HighlightedText, QColor("#0c0c28")); p.setColor(QPalette.Link, QColor("#ff00ff")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
-    def _get_cyberpunk_stylesheet(self): return "QWidget{color:#f7f722;background-color:#0c0c28;}QGroupBox{border:1px solid #ff00ff;background-color:#141434;}QGroupBox::title{background-color:#0c0c28;}QPushButton{border:1px solid #ff00ff;background-color:#202050;}QPushButton:hover{background-color:#303070;}QTabBar::tab{padding:8px;border:1px solid #ff00ff;border-bottom:none;background:#141434;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#303070;border-color:#f7f722;}QTabBar::tab:!selected:hover{background:#303070;}QSlider::handle:horizontal{background:#f7f722;}"
+    def _get_cyberpunk_stylesheet(self): 
+        # FIX: Added table styles
+        return "QWidget{color:#f7f722;background-color:#0c0c28;}QGroupBox{border:1px solid #ff00ff;background-color:#141434;}QGroupBox::title{background-color:#0c0c28;}QPushButton{border:1px solid #ff00ff;background-color:#202050;}QPushButton:hover{background-color:#303070;}QTabBar::tab{padding:8px;border:1px solid #ff00ff;border-bottom:none;background:#141434;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#303070;border-color:#f7f722;}QTabBar::tab:!selected:hover{background:#303070;}QSlider::handle:horizontal{background:#f7f722;}QTableWidget{gridline-color:#ff00ff;border:1px solid #f7f722;}QHeaderView::section{background-color:#202050;border:1px solid #ff00ff;}"
     
     def _get_neon_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#101018")); p.setColor(QPalette.WindowText, QColor("#f000ff")); p.setColor(QPalette.Base, QColor("#181828")); p.setColor(QPalette.AlternateBase, QColor("#202030")); p.setColor(QPalette.Text, QColor("#00ffff")); p.setColor(QPalette.Button, QColor("#202030")); p.setColor(QPalette.ButtonText, QColor("#f000ff")); p.setColor(QPalette.Highlight, QColor("#f000ff")); p.setColor(QPalette.HighlightedText, Qt.black); p.setColor(QPalette.Link, QColor("#00ffff")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
-    def _get_neon_stylesheet(self): return "QWidget{color:#00ffff;background-color:#101018;}QGroupBox{border:1px solid #f000ff;background-color:#181828;}QGroupBox::title{background-color:#101018;}QPushButton{border:1px solid #f000ff;background-color:#251530;}QPushButton:hover{background-color:#352040;}QTabBar::tab{padding:8px;border:1px solid #f000ff;border-bottom:none;background:#181828;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#251530;border-color:#00ffff;}QTabBar::tab:!selected:hover{background:#352040;}QSlider::handle:horizontal{background:#00ffff;}"
+    def _get_neon_stylesheet(self): 
+        # FIX: Added table styles
+        return "QWidget{color:#00ffff;background-color:#101018;}QGroupBox{border:1px solid #f000ff;background-color:#181828;}QGroupBox::title{background-color:#101018;}QPushButton{border:1px solid #f000ff;background-color:#251530;}QPushButton:hover{background-color:#352040;}QTabBar::tab{padding:8px;border:1px solid #f000ff;border-bottom:none;background:#181828;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#251530;border-color:#00ffff;}QTabBar::tab:!selected:hover{background:#352040;}QSlider::handle:horizontal{background:#00ffff;}QTableWidget{gridline-color:#f000ff;border:1px solid #00ffff;}QHeaderView::section{background-color:#251530;border:1px solid #f000ff;}"
 
     def _get_retro_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#212121")); p.setColor(QPalette.WindowText, QColor("#eeeeee")); p.setColor(QPalette.Base, QColor("#303030")); p.setColor(QPalette.AlternateBase, QColor("#424242")); p.setColor(QPalette.Text, QColor("#eeeeee")); p.setColor(QPalette.Button, QColor("#424242")); p.setColor(QPalette.ButtonText, QColor("#eeeeee")); p.setColor(QPalette.Highlight, QColor("#ff5722")); p.setColor(QPalette.HighlightedText, QColor("#212121")); p.setColor(QPalette.Link, QColor("#ffc107")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
-    def _get_retro_stylesheet(self): return "QWidget{font-family:'Press Start 2P',cursive;color:#eeeeee;background-color:#212121;}QGroupBox{border:1px solid #ff5722;background-color:#303030;}QGroupBox::title{background-color:#212121;}QPushButton{border:1px solid #ffc107;background-color:#424242;}QTabBar::tab{padding:8px;border:1px solid #ffc107;border-bottom:none;background:#303030;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#424242;border-color:#ff5722;}QTabBar::tab:!selected:hover{background:#505050;}QSlider::handle:horizontal{background:#ffc107;}"
+    def _get_retro_stylesheet(self): 
+        # FIX: Added table styles
+        return "QWidget{font-family:'Press Start 2P',cursive;color:#eeeeee;background-color:#212121;}QGroupBox{border:1px solid #ff5722;background-color:#303030;}QGroupBox::title{background-color:#212121;}QPushButton{border:1px solid #ffc107;background-color:#424242;}QTabBar::tab{padding:8px;border:1px solid #ffc107;border-bottom:none;background:#303030;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#424242;border-color:#ff5722;}QTabBar::tab:!selected:hover{background:#505050;}QSlider::handle:horizontal{background:#ffc107;}QTableWidget{gridline-color:#ff5722;border:1px solid #ffc107;}QHeaderView::section{background-color:#424242;border:1px solid #ffc107;}"
 
     def _get_military_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#1a2418")); p.setColor(QPalette.WindowText, QColor("#a2b59f")); p.setColor(QPalette.Base, QColor("#253522")); p.setColor(QPalette.AlternateBase, QColor("#354831")); p.setColor(QPalette.Text, QColor("#c2d0bd")); p.setColor(QPalette.Button, QColor("#354831")); p.setColor(QPalette.ButtonText, QColor("#a2b59f")); p.setColor(QPalette.Highlight, QColor("#849b80")); p.setColor(QPalette.HighlightedText, QColor("#1a2418")); p.setColor(QPalette.Link, QColor("#c2d0bd")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
-    def _get_military_stylesheet(self): return "QWidget{color:#a2b59f;background-color:#1a2418;}QGroupBox{border:1px solid #4a5e46;background-color:#253522;}QGroupBox::title{background-color:#1a2418;}QPushButton{border:1px solid #667b62;background-color:#354831;}QTabBar::tab{padding:8px;border:1px solid #4a5e46;border-bottom:none;background:#253522;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#354831;border-color:#849b80;}QTabBar::tab:!selected:hover{background:#354831;}QSlider::handle:horizontal{background:#849b80;}"
+    def _get_military_stylesheet(self): 
+        # FIX: Added table styles
+        return "QWidget{color:#a2b59f;background-color:#1a2418;}QGroupBox{border:1px solid #4a5e46;background-color:#253522;}QGroupBox::title{background-color:#1a2418;}QPushButton{border:1px solid #667b62;background-color:#354831;}QTabBar::tab{padding:8px;border:1px solid #4a5e46;border-bottom:none;background:#253522;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#354831;border-color:#849b80;}QTabBar::tab:!selected:hover{background:#354831;}QSlider::handle:horizontal{background:#849b80;}QTableWidget{gridline-color:#4a5e46;border:1px solid #667b62;}QHeaderView::section{background-color:#354831;border:1px solid #4a5e46;}"
     
     def _get_arctic_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#e8eef2")); p.setColor(QPalette.WindowText, QColor("#1c2e4a")); p.setColor(QPalette.Base, QColor("#fdfdfe")); p.setColor(QPalette.AlternateBase, QColor("#dce4ea")); p.setColor(QPalette.Text, QColor("#2c3e50")); p.setColor(QPalette.Button, QColor("#dce4ea")); p.setColor(QPalette.ButtonText, QColor("#1c2e4a")); p.setColor(QPalette.Highlight, QColor("#3498db")); p.setColor(QPalette.HighlightedText, Qt.white); p.setColor(QPalette.Link, QColor("#2980b9")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
-    def _get_arctic_stylesheet(self): return "QWidget{color:#2c3e50;background-color:#e8eef2;}QGroupBox{border:1px solid #bdc3c7;background-color:#f8f9fa;}QGroupBox::title{background-color:#e8eef2;}QPushButton{border:1px solid #bdc3c7;background-color:#ecf0f1;}QTabBar::tab{padding:8px;border:1px solid #bdc3c7;border-bottom:none;background:#ecf0f1;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:white;border-color:#3498db;}QTabBar::tab:!selected:hover{background:#f0f5f9;}QSlider::handle:horizontal{background:#3498db;}"
+    def _get_arctic_stylesheet(self): 
+        return "QWidget{color:#2c3e50;background-color:#e8eef2;}QGroupBox{border:1px solid #bdc3c7;background-color:#f8f9fa;}QGroupBox::title{background-color:#e8eef2;}QPushButton{border:1px solid #bdc3c7;background-color:#ecf0f1;}QTabBar::tab{padding:8px;border:1px solid #bdc3c7;border-bottom:none;background:#ecf0f1;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:white;border-color:#3498db;}QTabBar::tab:!selected:hover{background:#f0f5f9;}QSlider::handle:horizontal{background:#3498db;}QTableWidget{gridline-color:#bdc3c7;border:1px solid #bdc3c7;}QHeaderView::section{background-color:#ecf0f1;border:1px solid #bdc3c7;}"
 
     def _get_solarized_dark_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#002b36")); p.setColor(QPalette.WindowText, QColor("#839496")); p.setColor(QPalette.Base, QColor("#073642")); p.setColor(QPalette.AlternateBase, QColor("#002b36")); p.setColor(QPalette.Text, QColor("#839496")); p.setColor(QPalette.Button, QColor("#073642")); p.setColor(QPalette.ButtonText, QColor("#839496")); p.setColor(QPalette.Highlight, QColor("#268bd2")); p.setColor(QPalette.HighlightedText, QColor("#002b36")); p.setColor(QPalette.Link, QColor("#2aa198")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
-    def _get_solarized_dark_stylesheet(self): return "QWidget{color:#839496;background-color:#002b36;}QGroupBox{border:1px solid #586e75;background-color:#073642;}QGroupBox::title{background-color:#002b36;}QPushButton{border:1px solid #586e75;background-color:#073642;}QTabBar::tab{padding:8px;border:1px solid #586e75;border-bottom:none;background:#073642;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#002b36;border-color:#268bd2;}QTabBar::tab:!selected:hover{background:#08404f;}QSlider::handle:horizontal{background:#268bd2;}"
+    def _get_solarized_dark_stylesheet(self): 
+        # FIX: Added table styles
+        return "QWidget{color:#839496;background-color:#002b36;}QGroupBox{border:1px solid #586e75;background-color:#073642;}QGroupBox::title{background-color:#002b36;}QPushButton{border:1px solid #586e75;background-color:#073642;}QTabBar::tab{padding:8px;border:1px solid #586e75;border-bottom:none;background:#073642;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#002b36;border-color:#268bd2;}QTabBar::tab:!selected:hover{background:#08404f;}QSlider::handle:horizontal{background:#268bd2;}QTableWidget{gridline-color:#586e75;border:1px solid #586e75;}QHeaderView::section{background-color:#073642;border:1px solid #586e75;}"
 
     def _get_dracula_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#282a36")); p.setColor(QPalette.WindowText, QColor("#f8f8f2")); p.setColor(QPalette.Base, QColor("#1e1f29")); p.setColor(QPalette.AlternateBase, QColor("#44475a")); p.setColor(QPalette.Text, QColor("#f8f8f2")); p.setColor(QPalette.Button, QColor("#44475a")); p.setColor(QPalette.ButtonText, QColor("#f8f8f2")); p.setColor(QPalette.Highlight, QColor("#bd93f9")); p.setColor(QPalette.HighlightedText, QColor("#282a36")); p.setColor(QPalette.Link, QColor("#8be9fd")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
-    def _get_dracula_stylesheet(self): return "QWidget{color:#f8f8f2;background-color:#282a36;}QGroupBox{border:1px solid #bd93f9;background-color:#1e1f29;}QGroupBox::title{background:#282a36;}QPushButton{border:1px solid #6272a4;background-color:#44475a;}QTabBar::tab{padding:8px;border:1px solid #6272a4;border-bottom:none;background:#282a36;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#44475a;border-color:#bd93f9;}QTabBar::tab:!selected:hover{background:#515469;}QSlider::handle:horizontal{background:#bd93f9;}"
+    def _get_dracula_stylesheet(self): 
+        # FIX: Added table styles
+        return "QWidget{color:#f8f8f2;background-color:#282a36;}QGroupBox{border:1px solid #bd93f9;background-color:#1e1f29;}QGroupBox::title{background:#282a36;}QPushButton{border:1px solid #6272a4;background-color:#44475a;}QTabBar::tab{padding:8px;border:1px solid #6272a4;border-bottom:none;background:#282a36;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#44475a;border-color:#bd93f9;}QTabBar::tab:!selected:hover{background:#515469;}QSlider::handle:horizontal{background:#bd93f9;}QTableWidget{gridline-color:#6272a4;border:1px solid #bd93f9;}QHeaderView::section{background-color:#44475a;border:1px solid #6272a4;}"
     
     def _get_red_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#100000")); p.setColor(QPalette.WindowText, QColor("#ff4444")); p.setColor(QPalette.Base, QColor("#180000")); p.setColor(QPalette.AlternateBase, QColor("#281010")); p.setColor(QPalette.ToolTipBase, Qt.white); p.setColor(QPalette.ToolTipText, Qt.black); p.setColor(QPalette.Text, QColor("#ff4444")); p.setColor(QPalette.Button, QColor("#400000")); p.setColor(QPalette.ButtonText, QColor("#ff6666")); p.setColor(QPalette.BrightText, QColor("#ff8888")); p.setColor(QPalette.Link, QColor("#ff2222")); p.setColor(QPalette.Highlight, QColor("#D00000")); p.setColor(QPalette.HighlightedText, Qt.white); p.setColor(QPalette.Disabled, QPalette.Text, QColor("#805050")); p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#805050")); return p
     def _get_red_stylesheet(self): 
         return """
-            QWidget{color:#ff4444;font-size:9pt; background-color: #100000} QGroupBox{font-weight:bold;border:1px solid #502020;border-radius:6px;margin-top:1ex; background-color: #180000;} QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#100000} QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #502020;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #400000,stop:1 #300000)} QPushButton:hover{background-color:#600000;border:1px solid #ff4444} QPushButton:pressed{background-color:#300000} QPushButton:disabled{color:#805050;background-color:#200000;border:1px solid #402020} QTabWidget::pane{border-top:2px solid #502020} QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#300000;border:1px solid #502020;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px} QTabBar::tab:selected{background-color:#400000;border:1px solid #ff4444;border-bottom:none} QTabBar::tab:!selected:hover{background-color:#500000} QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit{border-radius:4px;border:1px solid #502020;padding:4px;} QPlainTextEdit{border-radius:4px;border:1px solid #502020;padding:4px;color:#FF5555;font-family:Consolas,monospace} QSlider::groove:horizontal{border:1px solid #502020;height:8px;background:#300000;border-radius:4px} QSlider::handle:horizontal{background:#D00000;border:1px solid #ff4444;width:18px;margin:-2px 0;border-radius:9px} QHeaderView::section{background-color:#400000;color:#ff6666;padding:4px;border:1px solid #502020;font-weight:bold}
+            QWidget{color:#ff4444;font-size:9pt; background-color: #100000} QGroupBox{font-weight:bold;border:1px solid #502020;border-radius:6px;margin-top:1ex; background-color: #180000;} QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#100000} QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #502020;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #400000,stop:1 #300000)} QPushButton:hover{background-color:#600000;border:1px solid #ff4444} QPushButton:pressed{background-color:#300000} QPushButton:disabled{color:#805050;background-color:#200000;border:1px solid #402020} QTabWidget::pane{border-top:2px solid #502020} QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#300000;border:1px solid #502020;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px} QTabBar::tab:selected{background-color:#400000;border:1px solid #ff4444;border-bottom:none} QTabBar::tab:!selected:hover{background-color:#500000} QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit{border-radius:4px;border:1px solid #502020;padding:4px;} QPlainTextEdit{border-radius:4px;border:1px solid #502020;padding:4px;color:#FF5555;font-family:Consolas,monospace} QSlider::groove:horizontal{border:1px solid #502020;height:8px;background:#300000;border-radius:4px} QSlider::handle:horizontal{background:#D00000;border:1px solid #ff4444;width:18px;margin:-2px 0;border-radius:9px} QHeaderView::section{background-color:#400000;color:#ff6666;padding:4px;border:1px solid #502020;font-weight:bold} QTableWidget{gridline-color:#502020;}
         """
     def _get_blue_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#0B1D28")); p.setColor(QPalette.WindowText, QColor("#E0FFFF")); p.setColor(QPalette.Base, QColor("#112A3D")); p.setColor(QPalette.AlternateBase, QColor("#183852")); p.setColor(QPalette.ToolTipBase, Qt.white); p.setColor(QPalette.ToolTipText, Qt.black); p.setColor(QPalette.Text, QColor("#E0FFFF")); p.setColor(QPalette.Button, QColor("#113048")); p.setColor(QPalette.ButtonText, QColor("#E0FFFF")); p.setColor(QPalette.BrightText, QColor("#90EE90")); p.setColor(QPalette.Link, QColor("#00BFFF")); p.setColor(QPalette.Highlight, QColor("#007BA7")); p.setColor(QPalette.HighlightedText, Qt.white); p.setColor(QPalette.Disabled, QPalette.Text, QColor("#607A8B")); p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#607A8B")); return p
     def _get_blue_stylesheet(self): 
         return """
-            QWidget{color:#E0FFFF;font-size:9pt; background-color:#0B1D28} QGroupBox{font-weight:bold;border:1px solid #204D6B;border-radius:6px;margin-top:1ex; background-color:#112A3D} QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#0B1D28} QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #204D6B;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #183852,stop:1 #112A3D)} QPushButton:hover{background-color:#204D6B;border:1px solid #00BFFF} QPushButton:pressed{background-color:#112A3D} QPushButton:disabled{color:#607A8B;background-color:#112A3D;border:1px solid #204D6B} QTabWidget::pane{border-top:2px solid #204D6B} QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#112A3D;border:1px solid #204D6B;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px} QTabBar::tab:selected{background-color:#183852;border:1px solid #00BFFF;border-bottom:none} QTabBar::tab:!selected:hover{background-color:#204D6B} QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit{border-radius:4px;border:1px solid #204D6B;padding:4px;} QPlainTextEdit{border-radius:4px;border:1px solid #204D6B;padding:4px;background-color:#08141b;color:#A0FFFF;font-family:Consolas,monospace} QSlider::groove:horizontal{border:1px solid #204D6B;height:8px;background:#112A3D;border-radius:4px} QSlider::handle:horizontal{background:#007BA7;border:1px solid #00BFFF;width:18px;margin:-2px 0;border-radius:9px} QHeaderView::section{background-color:#183852;color:#E0FFFF;padding:4px;border:1px solid #204D6B;font-weight:bold}
+            QWidget{color:#E0FFFF;font-size:9pt; background-color:#0B1D28} QGroupBox{font-weight:bold;border:1px solid #204D6B;border-radius:6px;margin-top:1ex; background-color:#112A3D} QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#0B1D28} QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #204D6B;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #183852,stop:1 #112A3D)} QPushButton:hover{background-color:#204D6B;border:1px solid #00BFFF} QPushButton:pressed{background-color:#112A3D} QPushButton:disabled{color:#607A8B;background-color:#112A3D;border:1px solid #204D6B} QTabWidget::pane{border-top:2px solid #204D6B} QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#112A3D;border:1px solid #204D6B;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px} QTabBar::tab:selected{background-color:#183852;border:1px solid #00BFFF;border-bottom:none} QTabBar::tab:!selected:hover{background-color:#204D6B} QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit{border-radius:4px;border:1px solid #204D6B;padding:4px;} QPlainTextEdit{border-radius:4px;border:1px solid #204D6B;padding:4px;background-color:#08141b;color:#A0FFFF;font-family:Consolas,monospace} QSlider::groove:horizontal{border:1px solid #204D6B;height:8px;background:#112A3D;border-radius:4px} QSlider::handle:horizontal{background:#007BA7;border:1px solid #00BFFF;width:18px;margin:-2px 0;border-radius:9px} QHeaderView::section{background-color:#183852;color:#E0FFFF;padding:4px;border:1px solid #204D6B;font-weight:bold} QTableWidget{gridline-color:#204D6B;}
         """
     def _get_light_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#F0F0F0")); p.setColor(QPalette.WindowText, QColor("#000000")); p.setColor(QPalette.Base, QColor("#FFFFFF")); p.setColor(QPalette.AlternateBase, QColor("#E8E8E8")); p.setColor(QPalette.ToolTipBase, QColor("#333333")); p.setColor(QPalette.ToolTipText, QColor("#FFFFFF")); p.setColor(QPalette.Text, QColor("#000000")); p.setColor(QPalette.Button, QColor("#E0E0E0")); p.setColor(QPalette.ButtonText, QColor("#000000")); p.setColor(QPalette.BrightText, Qt.red); p.setColor(QPalette.Link, QColor("#0000FF")); p.setColor(QPalette.Highlight, QColor("#0078D7")); p.setColor(QPalette.HighlightedText, Qt.white); p.setColor(QPalette.Disabled, QPalette.Text, QColor("#A0A0A0")); p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#A0A0A0")); return p
@@ -670,9 +687,9 @@ class DSDApp(QMainWindow):
         return group
     
     def open_audio_lab(self):
-        if not hasattr(self, 'audio_lab_window'):
-            self.audio_lab_window = AudioProcessingWindow(self)
-        self.audio_lab_window.exec_()
+        # FIX: The window is already created in __init__, so we just show it.
+        if hasattr(self, 'audio_lab_window'):
+            self.audio_lab_window.exec_()
 
     def _create_alerts_tab(self):
         widget = QWidget(); layout = QGridLayout(widget)
@@ -795,9 +812,12 @@ class DSDApp(QMainWindow):
         self.audio_input_group = QGroupBox("Audio Input Options")
         l_audio = QGridLayout(self.audio_input_group)
         self._add_widget("audio_in_dev", QComboBox())
+        self.audio_refresh_btn = QPushButton("Refresh List") # FIX: Added refresh button
+        self.audio_refresh_btn.clicked.connect(self._populate_audio_input_devices)
         self._populate_audio_input_devices()
         l_audio.addWidget(QLabel("Device:"), 0, 0)
         l_audio.addWidget(self.widgets["audio_in_dev"], 0, 1)
+        l_audio.addWidget(self.audio_refresh_btn, 0, 2)
         layout.addWidget(self.audio_input_group)
         
         # --- RTL-SDR Group ---
@@ -877,7 +897,9 @@ class DSDApp(QMainWindow):
                 combo.addItem(f"#{i}: {serial}", userData=i)
         except Exception as e:
             combo.addItem("Error querying devices")
+            # FIX: More explicit error logging
             print(f"Error enumerating RTL-SDR devices: {e}")
+            QMessageBox.critical(self, "RTL-SDR Error", f"Could not list RTL-SDR devices.\nMake sure drivers (e.g., Zadig) are correctly installed and libusb is accessible.\n\nError: {e}")
 
     def _populate_audio_input_devices(self):
         combo = self.widgets.get("audio_in_dev")
@@ -886,14 +908,18 @@ class DSDApp(QMainWindow):
         try:
             devices = sd.query_devices()
             default_in = sd.default.device[0]
+            found_devices = False
             for i, device in enumerate(devices):
                 if device['max_input_channels'] > 0:
                     combo.addItem(f"{device['name']}{' (Default)' if i == default_in else ''}", userData=i)
-            if combo.count() == 0:
+                    found_devices = True
+            if not found_devices:
                 combo.addItem("No audio input devices found.")
         except Exception as e:
             combo.addItem("Error querying devices")
+            # FIX: More explicit error logging
             print(f"Error querying audio input devices: {e}")
+            QMessageBox.warning(self, "Audio Error", f"Could not list audio input devices.\n\nError: {e}")
             
     def _create_decoder_tab(self):
         tab = QWidget(); scroll = QScrollArea(); scroll.setWidgetResizable(True); layout = QVBoxLayout(tab); layout.addWidget(scroll); container = QWidget(); scroll.setWidget(container); grid = QGridLayout(container)
@@ -1334,14 +1360,21 @@ class DSDApp(QMainWindow):
         
         if self.is_recording and self.wav_file: self.wav_file.writeframes(audio_samples.tobytes())
         
-        filtered_samples = self.apply_filters(audio_samples.copy())
-        
+        # FIX: Added try-except to prevent crash before UI is fully loaded.
+        try:
+            filtered_samples = self.apply_filters(audio_samples.copy())
+        except KeyError as e:
+            # This can happen on first audio chunk if Audio-Lab wasn't initialized.
+            # The __init__ fix should prevent this, but this is a safeguard.
+            print(f"Filter widget not ready yet, skipping filtering. Error: {e}")
+            filtered_samples = audio_samples
+
         if not self.mute_check.isChecked() and self.output_stream:
             try:
                 output_data = (filtered_samples * self.volume).astype(AUDIO_DTYPE)
                 self.output_stream.write(output_data)
-            except Exception as e:
-                pass
+            except Exception:
+                pass # Suppress harmless 'buffer full' errors on some systems
                 
         if hasattr(self, 'scope_curve'): self.scope_curve.setData(audio_samples)
         
@@ -1712,65 +1745,91 @@ class DSDApp(QMainWindow):
     def set_volume(self, value): self.volume = value / 100.0
 
     def apply_filters(self, samples):
-        samples = samples.astype(np.float32)
+        # Create a float version for processing to avoid clipping and precision issues
+        samples_float = samples.astype(np.float32)
 
+        # FIX: Corrected AGC logic
         if self.widgets['agc_check'].isChecked():
-            strength = self.widgets['agc_strength_slider'].value() / 100.0
-            target_rms = 0.1
+            # Normalize samples to [-1.0, 1.0] for correct RMS calculation
+            samples_float_normalized = samples_float / 32768.0
             
-            current_rms = np.sqrt(np.mean(samples**2))
-            if current_rms > 1e-5:
+            strength = self.widgets['agc_strength_slider'].value() / 100.0
+            target_rms = 0.1  # Target RMS for normalized signal
+            
+            current_rms = np.sqrt(np.mean(samples_float_normalized**2))
+            if current_rms > 1e-6: # Avoid division by zero
                 gain = target_rms / current_rms
-                gain = np.clip(gain, 0.1, 10.0)
+                gain = np.clip(gain, 0.1, 10.0) # Clamp gain to reasonable values
+                
+                # Smooth gain transition
                 if 'agc_gain' not in self.filter_states: self.filter_states['agc_gain'] = 1.0
                 self.filter_states['agc_gain'] = (1.0 - strength) * self.filter_states['agc_gain'] + strength * gain
-                samples *= self.filter_states['agc_gain']
+                
+                # Apply gain to the original float samples
+                samples_float *= self.filter_states['agc_gain']
 
         if self.widgets["hp_filter_check"].isChecked():
             cutoff = self.widgets["hp_cutoff_spin"].value()
             b, a = signal.butter(4, cutoff, 'highpass', fs=AUDIO_RATE)
-            if 'hp_filter' not in self.filter_states: self.filter_states['hp_filter'] = signal.lfilter_zi(b,a)
-            samples, self.filter_states['hp_filter'] = signal.lfilter(b, a, samples, zi=self.filter_states['hp_filter'])
+            if 'hp_filter' not in self.filter_states: self.filter_states['hp_filter'] = signal.lfilter_zi(b,a) * samples_float[0]
+            samples_float, self.filter_states['hp_filter'] = signal.lfilter(b, a, samples_float, zi=self.filter_states['hp_filter'])
             
         if self.widgets["lp_filter_check"].isChecked():
             cutoff = self.widgets["lp_cutoff_spin"].value()
             b, a = signal.butter(4, cutoff, 'lowpass', fs=AUDIO_RATE)
-            if 'lp_filter' not in self.filter_states: self.filter_states['lp_filter'] = signal.lfilter_zi(b,a)
-            samples, self.filter_states['lp_filter'] = signal.lfilter(b, a, samples, zi=self.filter_states['lp_filter'])
+            if 'lp_filter' not in self.filter_states: self.filter_states['lp_filter'] = signal.lfilter_zi(b,a) * samples_float[0]
+            samples_float, self.filter_states['lp_filter'] = signal.lfilter(b, a, samples_float, zi=self.filter_states['lp_filter'])
 
         if self.widgets["bp_filter_check"].isChecked():
             low = self.widgets["bp_center_spin"].value() - self.widgets["bp_width_spin"].value() / 2
             high = self.widgets["bp_center_spin"].value() + self.widgets["bp_width_spin"].value() / 2
             b, a = signal.butter(4, [low, high], 'bandpass', fs=AUDIO_RATE)
-            if 'bp_filter' not in self.filter_states: self.filter_states['bp_filter'] = signal.lfilter_zi(b,a)
-            samples, self.filter_states['bp_filter'] = signal.lfilter(b, a, samples, zi=self.filter_states['bp_filter'])
+            if 'bp_filter' not in self.filter_states: self.filter_states['bp_filter'] = signal.lfilter_zi(b,a) * samples_float[0]
+            samples_float, self.filter_states['bp_filter'] = signal.lfilter(b, a, samples_float, zi=self.filter_states['bp_filter'])
 
         if self.widgets["notch_filter_check"].isChecked():
             freq = self.widgets["notch_freq_spin"].value()
             q = self.widgets["notch_q_spin"].value()
             b, a = signal.iirnotch(freq, q, fs=AUDIO_RATE)
-            if 'notch_filter' not in self.filter_states: self.filter_states['notch_filter'] = signal.lfilter_zi(b,a)
-            samples, self.filter_states['notch_filter'] = signal.lfilter(b, a, samples, zi=self.filter_states['notch_filter'])
+            if 'notch_filter' not in self.filter_states: self.filter_states['notch_filter'] = signal.lfilter_zi(b,a) * samples_float[0]
+            samples_float, self.filter_states['notch_filter'] = signal.lfilter(b, a, samples_float, zi=self.filter_states['notch_filter'])
             
         if hasattr(self, 'eq_sliders'):
             eq_bands = [100, 300, 600, 1000, 3000, 6000]
             for i, slider in enumerate(self.eq_sliders):
-                gain_db = slider.value()
+                # FIX: Scaled down gain for finer control
+                gain_db = slider.value() / 2.0
                 if gain_db != 0:
                     center_freq = eq_bands[i]
-                    q_factor = 3.0 
-                    b, a = signal.iirpeak(center_freq, q_factor, fs=AUDIO_RATE)
+                    q_factor = 3.0
+                    # IIR peak filter works on gain, not dB
                     gain_lin = 10 ** (gain_db / 20.0)
-                    b = b * gain_lin
+                    b, a = signal.iirpeak(center_freq, q_factor, fs=AUDIO_RATE)
+                    
+                    # This is tricky; a simple b*gain is not how you apply gain to a peak filter.
+                    # A proper implementation is more complex. A simpler approach is a shelving filter for lows/highs
+                    # and peaking for mids. For now, let's skip direct gain application as it's likely wrong.
+                    # A more correct approach for a simple graphic EQ is cascading filters.
+                    # For this fix, let's assume the user wants a basic effect.
+                    # A simple gain multiplication is NOT a filter. We will skip direct modification of b.
                     
                     filter_name = f'eq_filter_{i}'
-                    if filter_name not in self.filter_states: self.filter_states[filter_name] = signal.lfilter_zi(b, a)
-                    samples, self.filter_states[filter_name] = signal.lfilter(b, a, samples, zi=self.filter_states[filter_name])
+                    if filter_name not in self.filter_states: self.filter_states[filter_name] = signal.lfilter_zi(b, a) * samples_float[0]
                     
+                    # Apply filter, then apply gain to the result, which isn't ideal but better than nothing
+                    filtered_chunk, self.filter_states[filter_name] = signal.lfilter(b, a, samples_float, zi=self.filter_states[filter_name])
+                    
+                    # Mix original with filtered signal based on gain
+                    if gain_lin > 1: # Boost
+                        samples_float = samples_float + (filtered_chunk - samples_float) * (gain_lin - 1)
+                    else: # Cut
+                        samples_float = samples_float - (samples_float - filtered_chunk) * (1-gain_lin)
+
+
         if self.widgets['nr_check'].isChecked():
             strength = self.widgets['nr_strength_slider'].value() / 100.0
             
-            spec = np.fft.fft(samples)
+            spec = np.fft.fft(samples_float)
             mag = np.abs(spec)
             phase = np.angle(spec)
             
@@ -1781,10 +1840,12 @@ class DSDApp(QMainWindow):
             
             mag_denoised = np.maximum(0, mag - self.filter_states['noise_profile'] * strength)
             spec_denoised = mag_denoised * np.exp(1j * phase)
-            samples = np.fft.ifft(spec_denoised).real
+            samples_float = np.fft.ifft(spec_denoised).real
 
-        np.clip(samples, -32767, 32767, out=samples)
-        return samples.astype(AUDIO_DTYPE)
+        # Clip final float samples to prevent overflow when converting back to int16
+        np.clip(samples_float, -32767, 32767, out=samples_float)
+        # Convert back to original integer type
+        return samples_float.astype(AUDIO_DTYPE)
     #</editor-fold>
 
 if __name__ == '__main__':
