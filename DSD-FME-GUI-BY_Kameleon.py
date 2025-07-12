@@ -297,12 +297,19 @@ class AudioProcessingWindow(QDialog):
         self.main_app.widgets['nr_strength_slider'].setValue(50)
 
 class ProcessReader(QObject):
-    line_read = pyqtSignal(str); finished = pyqtSignal()
-    def __init__(self, process): super().__init__(); self.process = process
+    line_read = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def __init__(self, process):
+        super().__init__()
+        self.process = process
+
     @pyqtSlot()
     def run(self):
         if self.process and self.process.stdout:
-            for line in iter(self.process.stdout.readline, ''): self.line_read.emit(line)
+            for line in iter(self.process.stdout.readline, ''):
+                self.line_read.emit(line)
+        # When the loop finishes (process terminates), emit the finished signal
         self.finished.emit()
 
 class UdpListener(QObject):
@@ -1420,14 +1427,21 @@ class DSDApp(QMainWindow):
         final_command = list(filter(None, (str(item).strip() for item in command))); self.cmd_preview.setText(subprocess.list2cmdline(final_command)); return final_command
 
     def start_process(self):
-        if self.process: return
+        if self.process:
+            return
         self.create_initial_map()
-        self.logbook_table.setRowCount(0); self.mini_logbook_table.setRowCount(0); self.is_in_transmission = False; self.last_logged_id = None; self.transmission_log.clear()
-        if hasattr(self, 'stt_table'): self.stt_table.setRowCount(0)
+        self.logbook_table.setRowCount(0)
+        self.mini_logbook_table.setRowCount(0)
+        self.is_in_transmission = False
+        self.last_logged_id = None
+        self.transmission_log.clear()
+        if hasattr(self, 'stt_table'):
+            self.stt_table.setRowCount(0)
         self.stt_active_id_row.clear()
 
         command = self.build_command()
-        if not command: return
+        if not command:
+            return
 
         lrrp_file_path = self.widgets["-L"].text()
         if lrrp_file_path:
@@ -1435,40 +1449,98 @@ class DSDApp(QMainWindow):
                 self.lrrp_watcher.removePaths(self.lrrp_watcher.files())
             self.lrrp_watcher.addPath(lrrp_file_path)
 
-        self.start_udp_listener(); self.restart_audio_stream()
+        self.start_udp_listener()
+        self.restart_audio_stream()
         log_start_msg = f"$ {subprocess.list2cmdline(command)}\n\n"
-        for term in [self.terminal_output_conf, self.terminal_output_dash]: term.clear(); term.appendPlainText(log_start_msg)
+        for term in [self.terminal_output_conf, self.terminal_output_dash]:
+            term.clear()
+            term.appendPlainText(log_start_msg)
         try:
-            si = subprocess.STARTUPINFO(); si.dwFlags |= subprocess.STARTF_USESHOWWINDOW; si.wShowWindow = subprocess.SW_HIDE
-            self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, universal_newlines=True, encoding='utf-8', errors='ignore', startupinfo=si, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-            self.reader_thread = QThread(); self.reader_worker = ProcessReader(self.process)
-            self.reader_worker.moveToThread(self.reader_thread); self.reader_worker.line_read.connect(self.update_terminal_log); self.reader_worker.finished.connect(self.on_process_finished)
-            self.reader_thread.started.connect(self.reader_worker.run); self.reader_thread.start()
-            self.btn_start.setEnabled(False); self.btn_stop.setEnabled(True); self.btn_start_dash.setEnabled(False); self.btn_stop_dash.setEnabled(True)
-        except Exception as e: error_msg = f"\nERROR: Failed to start process: {e}"; self.terminal_output_conf.appendPlainText(error_msg); self.terminal_output_dash.appendPlainText(error_msg); self.reset_ui_state()
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = subprocess.SW_HIDE
+            self.process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                universal_newlines=True,
+                encoding='utf-8',
+                errors='ignore',
+                startupinfo=si,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+            )
+
+            self.reader_thread = QThread()
+            self.reader_worker = ProcessReader(self.process)
+            self.reader_worker.moveToThread(self.reader_thread)
+
+            self.reader_worker.line_read.connect(self.update_terminal_log)
+            self.reader_thread.started.connect(self.reader_worker.run)
+            self.reader_worker.finished.connect(self._on_reader_finished) # Connect to the new robust handler
+
+            self.reader_thread.start()
+            self.set_ui_running_state(True)
+
+        except Exception as e:
+            error_msg = f"\nERROR: Failed to start process: {e}"
+            self.terminal_output_conf.appendPlainText(error_msg)
+            self.terminal_output_dash.appendPlainText(error_msg)
+            self.set_ui_running_state(False)
 
     def stop_process(self):
-        if self.is_recording: self.stop_internal_recording()
+        if self.is_recording:
+            self.stop_internal_recording()
         self.stop_udp_listener()
-        if self.output_stream: self.output_stream.stop(); self.output_stream.close(); self.output_stream = None
+        if self.output_stream:
+            self.output_stream.stop()
+            self.output_stream.close()
+            self.output_stream = None
+
         if self.process and self.process.poll() is None:
-            self.btn_stop.setEnabled(False); self.btn_stop_dash.setEnabled(False)
-            stop_msg = "\n--- SENDING STOP SIGNAL ---\n"; self.terminal_output_conf.appendPlainText(stop_msg); self.terminal_output_dash.appendPlainText(stop_msg)
+            self.set_ui_running_state(False) # Update UI immediately
+            stop_msg = "\n--- SENDING STOP SIGNAL ---\n"
+            self.terminal_output_conf.appendPlainText(stop_msg)
+            self.terminal_output_dash.appendPlainText(stop_msg)
             self.process.terminate()
-            try: self.process.wait(timeout=2)
-            except subprocess.TimeoutExpired: self.process.kill()
+            # The _on_reader_finished will be called automatically when the process exits.
 
-    def on_process_finished(self): self.end_all_transmissions(); self.reader_thread.quit(); self.reader_thread.wait(); self.reset_ui_state()
+    @pyqtSlot()
+    def _on_reader_finished(self):
+        """This is the single authoritative cleanup handler."""
+        # This function is now guaranteed to be called after the reader loop ends.
+        self.end_all_transmissions()
+        self.set_ui_running_state(False)
 
-    def reset_ui_state(self):
-        self.process = None; self.reader_thread = None; self.reader_worker = None
-        self.btn_start.setEnabled(True); self.btn_stop.setEnabled(False); self.btn_start_dash.setEnabled(True); self.btn_stop_dash.setEnabled(False)
+        if self.reader_thread:
+            self.reader_thread.quit()
+            self.reader_thread.wait() # Wait for the event loop to finish
+
+        # Now it's safe to clear the references
+        self.process = None
+        self.reader_worker = None
+        self.reader_thread = None
+
         ready_msg = "\n--- READY ---\n"
-        if hasattr(self, 'terminal_output_conf'): self.terminal_output_conf.appendPlainText(ready_msg); self.terminal_output_dash.appendPlainText(ready_msg)
+        if hasattr(self, 'terminal_output_conf'):
+            self.terminal_output_conf.appendPlainText(ready_msg)
+            self.terminal_output_dash.appendPlainText(ready_msg)
+
+
+    def set_ui_running_state(self, is_running):
+        self.btn_start.setEnabled(not is_running)
+        self.btn_stop.setEnabled(is_running)
+        self.btn_start_dash.setEnabled(not is_running)
+        self.btn_stop_dash.setEnabled(is_running)
+
 
     def update_terminal_log(self, text):
-        self.parse_and_display_log(text)
-        for term in [self.terminal_output_conf, self.terminal_output_dash]: term.moveCursor(QTextCursor.End); term.insertPlainText(text)
+        try:
+            self.parse_and_display_log(text)
+            for term in [self.terminal_output_conf, self.terminal_output_dash]: term.moveCursor(QTextCursor.End); term.insertPlainText(text)
+        except RuntimeError as e:
+            # This can happen if a widget is deleted while a signal is still in the queue
+            print(f"RuntimeError in update_terminal_log: {e}")
 
     def parse_and_display_log(self, text):
         try:
@@ -1549,7 +1621,7 @@ class DSDApp(QMainWindow):
 
         if hasattr(self, 'stt_enabled_check_dash') and self.stt_enabled_check_dash.isChecked() and self.stt_audio_buffer:
              for radio_id, audio_buffer in self.stt_audio_buffer.items():
-                if len(audio_buffer) > AUDIO_RATE * 2:
+                if len(audio_buffer) > AUDIO_RATE * 1: # Transcribe only if there's enough audio (e.g., > 0.5s)
                     audio_data = np.frombuffer(audio_buffer, dtype=AUDIO_DTYPE)
                     self.start_transcription(audio_data, radio_id)
         if end_current:
@@ -1593,30 +1665,44 @@ class DSDApp(QMainWindow):
         for panel in [self.live_labels_conf, self.live_labels_dash]: panel and (panel['recording'].setText("INACTIVE"), panel['recording'].setStyleSheet("color: gray;"))
 
     def process_audio_data(self, raw_data):
-        if raw_data.startswith(b"ERROR:"): QMessageBox.critical(self, "UDP Error", raw_data.decode()); self.close(); return
+        if raw_data.startswith(b"ERROR:"):
+            QMessageBox.critical(self, "UDP Error", raw_data.decode())
+            self.close()
+            return
+
         clean_num_bytes = (len(raw_data) // np.dtype(AUDIO_DTYPE).itemsize) * np.dtype(AUDIO_DTYPE).itemsize
-        if clean_num_bytes == 0: return
+        if clean_num_bytes == 0:
+            return
         audio_samples = np.frombuffer(raw_data[:clean_num_bytes], dtype=AUDIO_DTYPE)
 
-        if self.is_in_transmission and self.last_logged_id and self.last_logged_id in self.stt_audio_buffer:
-            self.stt_audio_buffer[self.last_logged_id].extend(audio_samples.tobytes())
-
-        if self.is_recording and self.wav_file: self.wav_file.writeframes(audio_samples.tobytes())
-
+        # Apply filters first
         try:
             filtered_samples = self.apply_filters(audio_samples.copy())
         except KeyError as e:
-            print(f"Filter widget not ready yet, skipping filtering. Error: {e}")
+            # This can happen if widgets are not fully initialized yet
+            print(f"Filter widget not ready, skipping filtering. Error: {e}")
             filtered_samples = audio_samples
 
+        # Add filtered audio to STT buffer
+        if self.is_in_transmission and self.last_logged_id and self.last_logged_id in self.stt_audio_buffer:
+            self.stt_audio_buffer[self.last_logged_id].extend(filtered_samples.tobytes())
+
+        # Write filtered audio for recording
+        if self.is_recording and self.wav_file:
+            self.wav_file.writeframes(filtered_samples.tobytes())
+
+        # Play filtered audio
         if not self.mute_check.isChecked() and self.output_stream:
             try:
                 output_data = (filtered_samples * self.volume).astype(AUDIO_DTYPE)
                 self.output_stream.write(output_data)
             except Exception:
+                # This can fail if the stream is closed, which is fine
                 pass
 
-        if hasattr(self, 'scope_curve'): self.scope_curve.setData(audio_samples)
+        # Use RAW (unfiltered) audio for visuals (scope, spectrogram)
+        if hasattr(self, 'scope_curve'):
+            self.scope_curve.setData(audio_samples)
 
         audio_samples_float = audio_samples.astype(np.float32) / 32768.0
 
@@ -2047,11 +2133,12 @@ class DSDApp(QMainWindow):
         if radio_id in self.stt_active_id_row:
             row = self.stt_active_id_row[radio_id]
             current_item = self.stt_table.item(row, 2)
-            current_text = current_item.text()
-            if current_text == "...":
-                current_item.setText(text)
-            else:
-                current_item.setText(f"{current_text} {text}")
+            if current_item: # Check if item exists
+                current_text = current_item.text()
+                if current_text == "...":
+                    current_item.setText(text)
+                else:
+                    current_item.setText(f"{current_text} {text}")
         if hasattr(self, 'stt_status_bar'):
             self.stt_status_bar.clearMessage()
 
@@ -2078,48 +2165,42 @@ class DSDApp(QMainWindow):
         if self.widgets["hp_filter_check"].isChecked():
             cutoff = self.widgets["hp_cutoff_spin"].value()
             b, a = signal.butter(4, cutoff, 'highpass', fs=AUDIO_RATE)
-            if 'hp_filter' not in self.filter_states: self.filter_states['hp_filter'] = signal.lfilter_zi(b,a) * samples_float[0]
+            if 'hp_filter' not in self.filter_states: self.filter_states['hp_filter'] = signal.lfilter_zi(b,a)
             samples_float, self.filter_states['hp_filter'] = signal.lfilter(b, a, samples_float, zi=self.filter_states['hp_filter'])
+
 
         if self.widgets["lp_filter_check"].isChecked():
             cutoff = self.widgets["lp_cutoff_spin"].value()
             b, a = signal.butter(4, cutoff, 'lowpass', fs=AUDIO_RATE)
-            if 'lp_filter' not in self.filter_states: self.filter_states['lp_filter'] = signal.lfilter_zi(b,a) * samples_float[0]
+            if 'lp_filter' not in self.filter_states: self.filter_states['lp_filter'] = signal.lfilter_zi(b,a)
             samples_float, self.filter_states['lp_filter'] = signal.lfilter(b, a, samples_float, zi=self.filter_states['lp_filter'])
 
         if self.widgets["bp_filter_check"].isChecked():
             low = self.widgets["bp_center_spin"].value() - self.widgets["bp_width_spin"].value() / 2
             high = self.widgets["bp_center_spin"].value() + self.widgets["bp_width_spin"].value() / 2
             b, a = signal.butter(4, [low, high], 'bandpass', fs=AUDIO_RATE)
-            if 'bp_filter' not in self.filter_states: self.filter_states['bp_filter'] = signal.lfilter_zi(b,a) * samples_float[0]
+            if 'bp_filter' not in self.filter_states: self.filter_states['bp_filter'] = signal.lfilter_zi(b,a)
             samples_float, self.filter_states['bp_filter'] = signal.lfilter(b, a, samples_float, zi=self.filter_states['bp_filter'])
 
         if self.widgets["notch_filter_check"].isChecked():
             freq = self.widgets["notch_freq_spin"].value()
             q = self.widgets["notch_q_spin"].value()
             b, a = signal.iirnotch(freq, q, fs=AUDIO_RATE)
-            if 'notch_filter' not in self.filter_states: self.filter_states['notch_filter'] = signal.lfilter_zi(b,a) * samples_float[0]
+            if 'notch_filter' not in self.filter_states: self.filter_states['notch_filter'] = signal.lfilter_zi(b,a)
             samples_float, self.filter_states['notch_filter'] = signal.lfilter(b, a, samples_float, zi=self.filter_states['notch_filter'])
 
         if hasattr(self, 'eq_sliders'):
             eq_bands = [100, 300, 600, 1000, 3000, 6000]
             for i, slider in enumerate(self.eq_sliders):
-                gain_db = slider.value() / 2.0
-                if gain_db != 0:
+                gain_db = slider.value()
+                if abs(gain_db) > 0.1: # Apply only if there is a change
                     center_freq = eq_bands[i]
                     q_factor = 3.0
-                    gain_lin = 10 ** (gain_db / 20.0)
-                    b, a = signal.iirpeak(center_freq, q_factor, fs=AUDIO_RATE)
+                    b, a = signal.iirpeak(center_freq, q_factor, fs=AUDIO_RATE, gain=gain_db)
                     
                     filter_name = f'eq_filter_{i}'
-                    if filter_name not in self.filter_states: self.filter_states[filter_name] = signal.lfilter_zi(b, a) * samples_float[0]
-                    
-                    filtered_chunk, self.filter_states[filter_name] = signal.lfilter(b, a, samples_float, zi=self.filter_states[filter_name])
-                    
-                    if gain_lin > 1:
-                        samples_float = samples_float + (filtered_chunk - samples_float) * (gain_lin - 1)
-                    else:
-                        samples_float = samples_float - (samples_float - filtered_chunk) * (1-gain_lin)
+                    if filter_name not in self.filter_states: self.filter_states[filter_name] = signal.lfilter_zi(b, a)
+                    samples_float, self.filter_states[filter_name] = signal.lfilter(b, a, samples_float, zi=self.filter_states[filter_name])
 
 
         if self.widgets['nr_check'].isChecked():
