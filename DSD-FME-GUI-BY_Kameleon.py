@@ -339,12 +339,18 @@ class NumericTableWidgetItem(QTableWidgetItem):
 class DSDApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.process = None; self.reader_thread = None; self.reader_worker = None
+        self.processes = []; self.reader_threads = []; self.reader_workers = []
         self.udp_listener_thread = None; self.udp_listener = None
+        self.udp_listener_thread2 = None; self.udp_listener2 = None
         self.is_in_transmission = False; self.alerts = []; self.recording_dir = ""
         self.is_recording = False; self.wav_file = None; self.is_resetting = False
         self.transmission_log = {}; self.last_logged_id = None
         self.output_stream = None; self.volume = 1.0
+        self.udp_port = UDP_PORT
+        self.last_samples = [None, None]
+        self.channel_last_audio = [0, 0]
+        self.muted_ids = set()
+        self.muted_tgs = set()
         self.filter_states = {}
         self.aliases = {'tg': {}, 'id': {}}
         self.current_tg = None; self.current_id = None; self.current_cc = None
@@ -395,6 +401,8 @@ class DSDApp(QMainWindow):
             "Night Mode (Astro Red)": { "palette": self._get_red_palette, "stylesheet": self._get_red_stylesheet, "pg_background": "#0a0000", "pg_foreground": "#ff4444", "spec_colormap": "Night Mode (Red)" },
             "Oceanic (Deep Blue)": { "palette": self._get_blue_palette, "stylesheet": self._get_blue_stylesheet, "pg_background": "#0B1D28", "pg_foreground": "#E0FFFF", "spec_colormap": "Oceanic (Blue)" },
             "Light (High Contrast)": { "palette": self._get_light_palette, "stylesheet": self._get_light_stylesheet, "pg_background": "#E8E8E8", "pg_foreground": "#000000", "spec_colormap": "Grayscale (Mono)" },
+            "Forest Night": { "palette": self._get_forest_palette, "stylesheet": self._get_forest_stylesheet, "pg_background": "#0b1a0b", "pg_foreground": "#dce9dc", "spec_colormap": "Night Vision" },
+            "Desert Storm": { "palette": self._get_desert_palette, "stylesheet": self._get_desert_stylesheet, "pg_background": "#3b2f1e", "pg_foreground": "#f0e3c0", "spec_colormap": "Amber Alert" },
         }
         self.current_theme_name = "Default (Kameleon Dark)"
 
@@ -478,6 +486,18 @@ class DSDApp(QMainWindow):
         return """
             QWidget{color:#000000;font-size:9pt} QGroupBox{font-weight:bold;border:1px solid #C0C0C0;border-radius:6px;margin-top:1ex;background-color:#F0F0F0} QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#F0F0F0} QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #C0C0C0;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #FDFDFD,stop:1 #E8E8E8)} QPushButton:hover{background-color:#E0E8F0;border:1px solid #0078D7} QPushButton:pressed{background-color:#D8E0E8} QPushButton:disabled{color:#A0A0A0;background-color:#E8E8E8;border:1px solid #D0D0D0} QTabWidget::pane{border-top:2px solid #C0C0C0} QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#E8E8E8;border:1px solid #C0C0C0;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px} QTabBar::tab:selected{background-color:#FFFFFF;border:1px solid #0078D7;border-bottom-color:#FFFFFF} QTabBar::tab:!selected:hover{background-color:#F0F8FF} QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit{border-radius:4px;border:1px solid #C0C0C0;padding:4px;background-color:#FFFFFF} QPlainTextEdit{border-radius:4px;border:1px solid #C0C0C0;padding:4px;background-color:#F8FFF8;color:#006400;font-family:Consolas,monospace} QSlider::groove:horizontal{border:1px solid #C0C0C0;height:8px;background:#E8E8E8;border-radius:4px} QSlider::handle:horizontal{background:#0078D7;border:1px solid #0078D7;width:18px;margin:-2px 0;border-radius:9px} QHeaderView::section{background-color:#E0E0E0;color:#000000;padding:4px;border:1px solid #C0C0C0;font-weight:bold}
         """
+
+    def _get_forest_palette(self):
+        p = QPalette(); p.setColor(QPalette.Window, QColor("#0b1a0b")); p.setColor(QPalette.WindowText, QColor("#dce9dc")); p.setColor(QPalette.Base, QColor("#132813")); p.setColor(QPalette.AlternateBase, QColor("#1b351b")); p.setColor(QPalette.Text, QColor("#dce9dc")); p.setColor(QPalette.Button, QColor("#1b351b")); p.setColor(QPalette.ButtonText, QColor("#dce9dc")); p.setColor(QPalette.Highlight, QColor("#2e6b2e")); p.setColor(QPalette.HighlightedText, Qt.black); p.setColor(QPalette.Link, QColor("#66ff66")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
+
+    def _get_forest_stylesheet(self):
+        return "QWidget{color:#dce9dc;background-color:#0b1a0b;}QGroupBox{border:1px solid #2e6b2e;background-color:#132813;}QGroupBox::title{background-color:#0b1a0b;}QPushButton{border:1px solid #2e6b2e;background-color:#1b351b;}QPushButton:hover{background-color:#2e6b2e;}QTabBar::tab{padding:8px;border:1px solid #2e6b2e;border-bottom:none;background:#132813;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#1b351b;border-color:#66ff66;}QTabBar::tab:!selected:hover{background:#1b351b;}QSlider::handle:horizontal{background:#2e6b2e;}QTableWidget{gridline-color:#2e6b2e;border:1px solid #2e6b2e;}QHeaderView::section{background-color:#1b351b;border:1px solid #2e6b2e;}"
+
+    def _get_desert_palette(self):
+        p = QPalette(); p.setColor(QPalette.Window, QColor("#3b2f1e")); p.setColor(QPalette.WindowText, QColor("#f0e3c0")); p.setColor(QPalette.Base, QColor("#4a3b24")); p.setColor(QPalette.AlternateBase, QColor("#5d4a2d")); p.setColor(QPalette.Text, QColor("#f0e3c0")); p.setColor(QPalette.Button, QColor("#5d4a2d")); p.setColor(QPalette.ButtonText, QColor("#f0e3c0")); p.setColor(QPalette.Highlight, QColor("#d4a65a")); p.setColor(QPalette.HighlightedText, Qt.black); p.setColor(QPalette.Link, QColor("#ffdd99")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
+
+    def _get_desert_stylesheet(self):
+        return "QWidget{color:#f0e3c0;background-color:#3b2f1e;}QGroupBox{border:1px solid #d4a65a;background-color:#4a3b24;}QGroupBox::title{background-color:#3b2f1e;}QPushButton{border:1px solid #d4a65a;background-color:#5d4a2d;}QPushButton:hover{background-color:#7a5e3a;}QTabBar::tab{padding:8px;border:1px solid #d4a65a;border-bottom:none;background:#4a3b24;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#5d4a2d;border-color:#ffdd99;}QTabBar::tab:!selected:hover{background:#5d4a2d;}QSlider::handle:horizontal{background:#d4a65a;}QTableWidget{gridline-color:#d4a65a;border:1px solid #d4a65a;}QHeaderView::section{background-color:#5d4a2d;border:1px solid #d4a65a;}"
     #</editor-fold>
 
     #<editor-fold desc="Configuration Management">
@@ -554,6 +574,8 @@ class DSDApp(QMainWindow):
 
         if hasattr(self, 'recorder_dir_edit'): self.recorder_dir_edit.setText(ui_settings.get('recorder_dir_edit', ''))
         if hasattr(self, 'volume_slider'): self.volume_slider.setValue(ui_settings.get('volume_slider', 100))
+        if hasattr(self, 'udp_port_spin'): self.udp_port = self.udp_port_spin.value()
+        if hasattr(self, 'mute_id_edit'): self.update_mute_lists()
 
 
     def _save_app_config(self):
@@ -765,26 +787,36 @@ class DSDApp(QMainWindow):
         main_layout.addWidget(QLabel("Volume:"), 1, 0); main_layout.addWidget(self.volume_slider, 1, 1, 1, 2)
         main_layout.addWidget(self.rms_label, 2, 0); main_layout.addWidget(self.peak_freq_label, 2, 1)
 
+        self.udp_port_spin = self._add_widget('udp_port_spin', QSpinBox())
+        self.udp_port_spin.setRange(1024, 65535); self.udp_port_spin.setValue(self.udp_port)
+        self.udp_port_spin.valueChanged.connect(self.update_udp_port)
+        main_layout.addWidget(QLabel("UDP Port:"), 3, 0); main_layout.addWidget(self.udp_port_spin, 3, 1, 1, 2)
+
         if is_dashboard:
             self.audio_lab_btn = QPushButton("Open Audio-Lab")
             self.audio_lab_btn.clicked.connect(self.open_audio_lab)
-            main_layout.addWidget(self.audio_lab_btn, 3, 0, 1, 3)
+            main_layout.addWidget(self.audio_lab_btn, 4, 0, 1, 3)
 
             self.theme_combo = QComboBox(); self.theme_combo.addItems(self.themes.keys()); self.theme_combo.currentTextChanged.connect(self.apply_theme)
-            main_layout.addWidget(QLabel("Theme:"), 4, 0); main_layout.addWidget(self.theme_combo, 4, 1, 1, 2)
+            main_layout.addWidget(QLabel("Theme:"), 5, 0); main_layout.addWidget(self.theme_combo, 5, 1, 1, 2)
 
             self.colormap_combo = QComboBox(); self.colormap_combo.addItems(self.colormaps.keys()); self.colormap_combo.currentTextChanged.connect(lambda name: self.imv.setColorMap(self.colormaps[name]))
-            main_layout.addWidget(QLabel("Spectrogram:"), 5, 0); main_layout.addWidget(self.colormap_combo, 5, 1, 1, 2)
+            main_layout.addWidget(QLabel("Spectrogram:"), 6, 0); main_layout.addWidget(self.colormap_combo, 6, 1, 1, 2)
 
             self.stt_enabled_check_dash = QCheckBox("Enable Transcription (STT)"); self._add_widget('stt_enabled_check_dash', self.stt_enabled_check_dash)
-            main_layout.addWidget(self.stt_enabled_check_dash, 6, 0)
+            main_layout.addWidget(self.stt_enabled_check_dash, 7, 0)
 
             self.recorder_enabled_check_dash = QCheckBox("Enable Rec."); self.recorder_enabled_check_dash.toggled.connect(lambda state: self.recorder_enabled_check.setChecked(state)); self._add_widget('recorder_enabled_check_dash', self.recorder_enabled_check_dash)
-            main_layout.addWidget(self.recorder_enabled_check_dash, 7, 0)
+            main_layout.addWidget(self.recorder_enabled_check_dash, 8, 0)
 
-            self.btn_start_dash = QPushButton("START"); self.btn_start_dash.clicked.connect(self.start_process)
-            self.btn_stop_dash = QPushButton("STOP"); self.btn_stop_dash.setEnabled(False); self.btn_stop_dash.clicked.connect(self.stop_process)
-            main_layout.addWidget(self.btn_start_dash, 7, 1); main_layout.addWidget(self.btn_stop_dash, 7, 2)
+        self.mute_id_edit = self._add_widget('mute_id_edit', QLineEdit())
+        self.mute_tg_edit = self._add_widget('mute_tg_edit', QLineEdit())
+        self.mute_id_edit.setPlaceholderText("IDs to mute (comma-separated)")
+        self.mute_tg_edit.setPlaceholderText("TGs to mute (comma-separated)")
+        self.mute_id_edit.textChanged.connect(self.update_mute_lists)
+        self.mute_tg_edit.textChanged.connect(self.update_mute_lists)
+        main_layout.addWidget(QLabel("Mute IDs:"), 9, 0); main_layout.addWidget(self.mute_id_edit, 9, 1, 1, 2)
+        main_layout.addWidget(QLabel("Mute TGs:"), 10, 0); main_layout.addWidget(self.mute_tg_edit, 10, 1, 1, 2)
 
         self.device_combo.currentIndexChanged.connect(self.restart_audio_stream); self.volume_slider.valueChanged.connect(self.set_volume)
         return group
@@ -1025,14 +1057,23 @@ class DSDApp(QMainWindow):
         input_type_combo.setCurrentText("tcp")
 
         self._add_widget("-i_tcp", QLineEdit("127.0.0.1:7355"))
+        self._add_widget("-i_tcp2", QLineEdit("127.0.0.1:7356"))
         self._add_widget("-i_wav", QLineEdit())
         self._add_widget("-i_m17udp", QLineEdit("127.0.0.1:17000"))
+        self.dual_tcp_check = self._add_widget("dual_tcp_check", QCheckBox("Enable Dual TCP Inputs"))
 
         l1.addWidget(QLabel("Type:"), 0, 0); l1.addWidget(self.widgets["-i_type"], 0, 1)
         l1.addWidget(QLabel("TCP Addr:Port:"), 1, 0); l1.addWidget(self.widgets["-i_tcp"], 1, 1)
         l1.addWidget(QLabel("WAV File:"), 2, 0); l1.addWidget(self.widgets["-i_wav"], 2, 1); l1.addWidget(self._create_browse_button(self.widgets["-i_wav"]), 2, 2)
         l1.addWidget(QLabel("M17 UDP Addr:Port:"), 3, 0); l1.addWidget(self.widgets["-i_m17udp"], 3, 1)
+        l1.addWidget(self.dual_tcp_check, 4, 0, 1, 2)
+        l1.addWidget(QLabel("TCP2 Addr:Port:"), 5, 0); l1.addWidget(self.widgets["-i_tcp2"], 5, 1)
         layout.addWidget(g1)
+
+        self.widgets["-i_tcp2"].setEnabled(False)
+        self.dual_tcp_check.toggled.connect(lambda state: self.widgets["-i_tcp2"].setEnabled(state))
+        self.dual_tcp_check.toggled.connect(lambda _: self.restart_audio_stream())
+        self.dual_tcp_check.toggled.connect(lambda _: self.build_command())
 
         self.audio_input_group = QGroupBox("Audio Input Options")
         l_audio = QGridLayout(self.audio_input_group)
@@ -1064,9 +1105,12 @@ class DSDApp(QMainWindow):
         def toggle_input_options(text):
             is_rtl = (text == 'rtl')
             is_audio = (text == 'audio')
+            is_tcp = (text == 'tcp')
             self.rtl_group.setVisible(is_rtl)
             self.audio_input_group.setVisible(is_audio)
-            self.widgets['-i_tcp'].setEnabled(text == 'tcp')
+            self.widgets['-i_tcp'].setEnabled(is_tcp)
+            self.dual_tcp_check.setEnabled(is_tcp)
+            self.widgets['-i_tcp2'].setEnabled(is_tcp and self.dual_tcp_check.isChecked())
             self.widgets["-i_wav"].setEnabled(text == 'wav')
             self.widgets["-i_m17udp"].setEnabled(text == 'm17udp')
 
@@ -1380,15 +1424,36 @@ class DSDApp(QMainWindow):
         path = QFileDialog.getExistingDirectory(self, "Select Directory") if is_dir else QFileDialog.getOpenFileName(self, "Select File")[0]
         if path: line_edit_widget.setText(path)
 
-    def start_udp_listener(self): self.udp_listener_thread = QThread(); self.udp_listener = UdpListener(UDP_IP, UDP_PORT); self.udp_listener.moveToThread(self.udp_listener_thread); self.udp_listener_thread.started.connect(self.udp_listener.run); self.udp_listener.data_ready.connect(self.process_audio_data); self.udp_listener_thread.start()
+    def start_udp_listener(self):
+        self.udp_listener_thread = QThread(); self.udp_listener = UdpListener(UDP_IP, self.udp_port)
+        self.udp_listener.moveToThread(self.udp_listener_thread)
+        self.udp_listener_thread.started.connect(self.udp_listener.run)
+        self.udp_listener.data_ready.connect(lambda d: self.process_audio_data(d, 0))
+        self.udp_listener_thread.start()
+        if self.widgets.get('dual_tcp_check') and self.widgets['dual_tcp_check'].isChecked():
+            self.udp_listener_thread2 = QThread(); self.udp_listener2 = UdpListener(UDP_IP, self.udp_port + 1)
+            self.udp_listener2.moveToThread(self.udp_listener_thread2)
+            self.udp_listener_thread2.started.connect(self.udp_listener2.run)
+            self.udp_listener2.data_ready.connect(lambda d: self.process_audio_data(d, 1))
+            self.udp_listener_thread2.start()
 
     def stop_udp_listener(self):
         if self.udp_listener: self.udp_listener.running = False
         if self.udp_listener_thread: self.udp_listener_thread.quit(); self.udp_listener_thread.wait()
+        if self.udp_listener2: self.udp_listener2.running = False
+        if self.udp_listener_thread2: self.udp_listener_thread2.quit(); self.udp_listener_thread2.wait()
+
+    def update_udp_port(self, value):
+        self.udp_port = value
+        self.build_command()
+
+    def update_mute_lists(self):
+        self.muted_ids = {s.strip() for s in self.mute_id_edit.text().split(',') if s.strip()}
+        self.muted_tgs = {s.strip() for s in self.mute_tg_edit.text().split(',') if s.strip()}
 
     def build_command(self):
         if not self.dsd_fme_path: self.cmd_preview.setText("ERROR: DSD-FME path not set!"); return []
-        command = [self.dsd_fme_path, "-o", f"udp:{UDP_IP}:{UDP_PORT}"]
+        command = [self.dsd_fme_path, "-o", f"udp:{UDP_IP}:{self.udp_port}"]
         in_type = self.widgets["-i_type"].currentText()
 
         if in_type == "tcp": command.extend(["-i", f"tcp:{self.widgets['-i_tcp'].text()}" if self.widgets['-i_tcp'].text() else "tcp"])
@@ -1424,10 +1489,20 @@ class DSDApp(QMainWindow):
         for btn, flag in self.inverse_widgets.items():
             if flag and btn.isChecked(): command.append(flag)
 
-        final_command = list(filter(None, (str(item).strip() for item in command))); self.cmd_preview.setText(subprocess.list2cmdline(final_command)); return final_command
+        final_command = list(filter(None, (str(item).strip() for item in command)))
+        if self.widgets.get('dual_tcp_check') and self.widgets['dual_tcp_check'].isChecked():
+            command2 = final_command.copy()
+            if "-o" in command2:
+                idx = command2.index("-o"); command2[idx+1] = f"udp:{UDP_IP}:{self.udp_port + 1}"
+            if "-i" in command2 and self.widgets['-i_type'].currentText() == "tcp":
+                idx = command2.index("-i"); command2[idx+1] = f"tcp:{self.widgets['-i_tcp2'].text()}" if self.widgets['-i_tcp2'].text() else "tcp"
+            self.cmd_preview.setText(subprocess.list2cmdline(final_command) + " && " + subprocess.list2cmdline(command2))
+            return [final_command, command2]
+        else:
+            self.cmd_preview.setText(subprocess.list2cmdline(final_command)); return final_command
 
     def start_process(self):
-        if self.process:
+        if self.processes:
             return
         self.create_initial_map()
         self.logbook_table.setRowCount(0)
@@ -1443,6 +1518,8 @@ class DSDApp(QMainWindow):
         if not command:
             return
 
+        commands = command if isinstance(command[0], list) else [command]
+
         lrrp_file_path = self.widgets["-L"].text()
         if lrrp_file_path:
             if self.lrrp_watcher.files():
@@ -1451,35 +1528,40 @@ class DSDApp(QMainWindow):
 
         self.start_udp_listener()
         self.restart_audio_stream()
-        log_start_msg = f"$ {subprocess.list2cmdline(command)}\n\n"
+        cmd_preview = " && ".join(subprocess.list2cmdline(c) for c in commands)
+        log_start_msg = f"$ {cmd_preview}\n\n"
         for term in [self.terminal_output_conf, self.terminal_output_dash]:
             term.clear()
             term.appendPlainText(log_start_msg)
         try:
-            si = subprocess.STARTUPINFO()
-            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            si.wShowWindow = subprocess.SW_HIDE
-            self.process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-                universal_newlines=True,
-                encoding='utf-8',
-                errors='ignore',
-                startupinfo=si,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
-            )
+            for cmd in commands:
+                si = subprocess.STARTUPINFO()
+                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                si.wShowWindow = subprocess.SW_HIDE
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    universal_newlines=True,
+                    encoding='utf-8',
+                    errors='ignore',
+                    startupinfo=si,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+                )
 
-            self.reader_thread = QThread()
-            self.reader_worker = ProcessReader(self.process)
-            self.reader_worker.moveToThread(self.reader_thread)
+                thread = QThread()
+                worker = ProcessReader(proc)
+                worker.moveToThread(thread)
 
-            self.reader_worker.line_read.connect(self.update_terminal_log)
-            self.reader_thread.started.connect(self.reader_worker.run)
-            self.reader_worker.finished.connect(self._on_reader_finished) # Connect to the new robust handler
+                worker.line_read.connect(self.update_terminal_log)
+                thread.started.connect(worker.run)
+                worker.finished.connect(self._on_reader_finished)
 
-            self.reader_thread.start()
+                thread.start()
+                self.processes.append(proc)
+                self.reader_threads.append(thread)
+                self.reader_workers.append(worker)
             self.set_ui_running_state(True)
 
         except Exception as e:
@@ -1497,34 +1579,41 @@ class DSDApp(QMainWindow):
             self.output_stream.close()
             self.output_stream = None
 
-        if self.process and self.process.poll() is None:
-            self.set_ui_running_state(False) # Update UI immediately
+        if self.processes:
+            self.set_ui_running_state(False)
             stop_msg = "\n--- SENDING STOP SIGNAL ---\n"
             self.terminal_output_conf.appendPlainText(stop_msg)
             self.terminal_output_dash.appendPlainText(stop_msg)
-            self.process.terminate()
-            # The _on_reader_finished will be called automatically when the process exits.
+        for proc in self.processes:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        for thread in self.reader_threads:
+            thread.quit()
+            thread.wait()
+        self.processes.clear()
+        self.reader_threads.clear()
+        self.reader_workers.clear()
 
     @pyqtSlot()
     def _on_reader_finished(self):
-        """This is the single authoritative cleanup handler."""
-        # This function is now guaranteed to be called after the reader loop ends.
+        if any(proc.poll() is None for proc in self.processes):
+            return
         self.end_all_transmissions()
         self.set_ui_running_state(False)
-
-        if self.reader_thread:
-            self.reader_thread.quit()
-            self.reader_thread.wait() # Wait for the event loop to finish
-
-        # Now it's safe to clear the references
-        self.process = None
-        self.reader_worker = None
-        self.reader_thread = None
-
+        for thread in self.reader_threads:
+            thread.quit()
+            thread.wait()
         ready_msg = "\n--- READY ---\n"
         if hasattr(self, 'terminal_output_conf'):
             self.terminal_output_conf.appendPlainText(ready_msg)
             self.terminal_output_dash.appendPlainText(ready_msg)
+        self.processes.clear()
+        self.reader_threads.clear()
+        self.reader_workers.clear()
 
 
     def set_ui_running_state(self, is_running):
@@ -1664,7 +1753,7 @@ class DSDApp(QMainWindow):
         self.wav_file = None; self.is_recording = False
         for panel in [self.live_labels_conf, self.live_labels_dash]: panel and (panel['recording'].setText("INACTIVE"), panel['recording'].setStyleSheet("color: gray;"))
 
-    def process_audio_data(self, raw_data):
+    def process_audio_data(self, raw_data, channel=0):
         if raw_data.startswith(b"ERROR:"):
             QMessageBox.critical(self, "UDP Error", raw_data.decode())
             self.close()
@@ -1674,6 +1763,8 @@ class DSDApp(QMainWindow):
         if clean_num_bytes == 0:
             return
         audio_samples = np.frombuffer(raw_data[:clean_num_bytes], dtype=AUDIO_DTYPE)
+
+        self.channel_last_audio[channel] = time.time()
 
         # Apply filters first
         try:
@@ -1691,13 +1782,35 @@ class DSDApp(QMainWindow):
         if self.is_recording and self.wav_file:
             self.wav_file.writeframes(filtered_samples.tobytes())
 
-        # Play filtered audio
-        if not self.mute_check.isChecked() and self.output_stream:
+        self.last_samples[channel] = filtered_samples
+
+        play_allowed = not ((self.current_id in self.muted_ids) or (self.current_tg in self.muted_tgs))
+
+        if play_allowed and not self.mute_check.isChecked() and self.output_stream:
             try:
-                output_data = (filtered_samples * self.volume).astype(AUDIO_DTYPE)
-                self.output_stream.write(output_data)
+                if self.widgets.get('dual_tcp_check') and self.widgets['dual_tcp_check'].isChecked():
+                    active1 = time.time() - self.channel_last_audio[0] < 0.1 and self.last_samples[0] is not None
+                    active2 = time.time() - self.channel_last_audio[1] < 0.1 and self.last_samples[1] is not None
+                    if active1 and active2:
+                        length = min(len(self.last_samples[0]), len(self.last_samples[1]))
+                        ch1 = self.last_samples[0][:length]
+                        ch2 = self.last_samples[1][:length]
+                        stereo = np.vstack((ch1, ch2)).T.flatten()
+                    elif active1:
+                        ch1 = self.last_samples[0]
+                        stereo = np.vstack((ch1, ch1)).T.flatten()
+                    elif active2:
+                        ch2 = self.last_samples[1]
+                        stereo = np.vstack((ch2, ch2)).T.flatten()
+                    else:
+                        stereo = None
+                    if stereo is not None:
+                        output_data = (stereo * self.volume).astype(AUDIO_DTYPE)
+                        self.output_stream.write(output_data)
+                else:
+                    output_data = (filtered_samples * self.volume).astype(AUDIO_DTYPE)
+                    self.output_stream.write(output_data)
             except Exception:
-                # This can fail if the stream is closed, which is fine
                 pass
 
         # Use RAW (unfiltered) audio for visuals (scope, spectrogram)
@@ -2096,7 +2209,8 @@ class DSDApp(QMainWindow):
         if self.output_stream: self.output_stream.stop(); self.output_stream.close()
         self.filter_states.clear()
         try:
-            self.output_stream = sd.OutputStream(samplerate=AUDIO_RATE, device=self.device_combo.currentData(), channels=1, dtype=AUDIO_DTYPE, blocksize=CHUNK_SAMPLES); self.output_stream.start()
+            channels = 2 if self.widgets.get('dual_tcp_check') and self.widgets['dual_tcp_check'].isChecked() else 1
+            self.output_stream = sd.OutputStream(samplerate=AUDIO_RATE, device=self.device_combo.currentData(), channels=channels, dtype=AUDIO_DTYPE, blocksize=CHUNK_SAMPLES); self.output_stream.start()
         except Exception as e: print(f"Error opening audio stream: {e}")
 
     def set_volume(self, value): self.volume = value / 100.0
