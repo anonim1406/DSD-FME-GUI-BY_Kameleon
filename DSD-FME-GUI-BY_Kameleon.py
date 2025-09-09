@@ -20,19 +20,6 @@ else:
     APP_DATA_DIR = os.path.join(os.path.expanduser('~'), '.config', APP_NAME)
 os.makedirs(APP_DATA_DIR, exist_ok=True)
 
-# +++ STT Integration +++
-try:
-    import whisper
-    WHISPER_AVAILABLE = True
-except ImportError:
-    WHISPER_AVAILABLE = False
-
-try:
-    from vosk import Model as VoskModel, KaldiRecognizer
-    VOSK_AVAILABLE = True
-except ImportError:
-    VOSK_AVAILABLE = False
-
 
 def resource_path(relative_path):
     try:
@@ -97,68 +84,6 @@ WAV_CHANNELS = 2; WAV_SAMPWIDTH = 2
 class IntegerAxis(AxisItem):
     def tickStrings(self, values, scale, spacing):
         return [f'{int(v)}' for v in values]
-
-# +++ STT Integration: Transcription Worker +++
-class TranscriptionWorker(QObject):
-    finished = pyqtSignal(str, str)
-    progress = pyqtSignal(str)
-
-    def __init__(self, audio_data, radio_id, stt_settings):
-        super().__init__()
-        self.audio_data = audio_data
-        self.radio_id = radio_id
-        self.settings = stt_settings
-
-    @pyqtSlot()
-    def run(self):
-        engine = self.settings.get('engine')
-        result_text = f"[{engine} Error]"
-
-        try:
-            if engine == 'Whisper' and WHISPER_AVAILABLE:
-                result_text = self.transcribe_whisper()
-            elif engine == 'Vosk' and VOSK_AVAILABLE:
-                result_text = self.transcribe_vosk()
-            else:
-                result_text = "[STT Engine not available]"
-        except Exception as e:
-            result_text = f"[Transcription failed: {e}]"
-            print(f"Transcription error for ID {self.radio_id}: {e}")
-
-        self.finished.emit(self.radio_id, result_text)
-
-    def transcribe_whisper(self):
-        model_name = self.settings.get('whisper_model', 'tiny')
-        language = self.settings.get('language', 'English')
-        lang_map = {'Polish': 'pl', 'English': 'en'}
-
-        self.progress.emit(f"Loading Whisper model: {model_name}...")
-        model = whisper.load_model(model_name)
-
-        self.progress.emit(f"Transcribing audio for ID: {self.radio_id}...")
-        # Whisper expects float32 array normalized to [-1.0, 1.0]
-        audio_float = self.audio_data.astype(np.float32) / 32768.0
-        result = model.transcribe(audio_float, language=lang_map.get(language, 'en'))
-
-        self.progress.emit("Transcription complete.")
-        return result['text'].strip()
-
-    def transcribe_vosk(self):
-        model_path = self.settings.get('vosk_model_path')
-        if not model_path or not os.path.exists(model_path):
-            return "[Vosk model path not set or invalid]"
-
-        self.progress.emit(f"Loading Vosk model from: {model_path}...")
-        model = VoskModel(model_path)
-        rec = KaldiRecognizer(model, AUDIO_RATE)
-        rec.SetWords(True)
-
-        self.progress.emit(f"Transcribing audio for ID: {self.radio_id}...")
-        rec.AcceptWaveform(self.audio_data.tobytes())
-        result = json.loads(rec.FinalResult())
-
-        self.progress.emit("Transcription complete.")
-        return result.get('text', '')
 
 class AudioProcessingWindow(QDialog):
     def __init__(self, parent=None):
@@ -362,11 +287,6 @@ class DSDApp(QMainWindow):
         self.fs_watcher = QFileSystemWatcher(); self.fs_watcher.directoryChanged.connect(self.update_recording_list)
         self.lrrp_watcher = QFileSystemWatcher()
         self.lrrp_watcher.fileChanged.connect(self.update_map_from_lrrp)
-        # +++ STT Integration +++
-        self.stt_audio_buffer = {}
-        self.stt_active_id_row = {}
-        self.transcription_thread = None
-        self.transcription_worker = None
 
         self.setWindowTitle("DSD-FME-GUI-BY Kameleon v3.0")
         self.setGeometry(100, 100, 1600, 950)
@@ -555,12 +475,7 @@ class DSDApp(QMainWindow):
                     print(f"Warning: Could not load UI setting for '{key}': {e}")
 
         # +++ STT Integration: Load STT settings +++
-        stt_settings = config.get('stt_settings', {})
-        if hasattr(self, 'stt_engine_combo'): self.stt_engine_combo.setCurrentText(stt_settings.get('engine', 'Whisper'))
-        if hasattr(self, 'stt_whisper_model_combo'): self.stt_whisper_model_combo.setCurrentText(stt_settings.get('whisper_model', 'tiny'))
-        if hasattr(self, 'stt_vosk_path_edit'): self.stt_vosk_path_edit.setText(stt_settings.get('vosk_model_path', ''))
-        if hasattr(self, 'stt_lang_combo'): self.stt_lang_combo.setCurrentText(stt_settings.get('language', 'English'))
-        if hasattr(self, 'stt_enabled_check_dash'): self.stt_enabled_check_dash.setChecked(stt_settings.get('enabled', False))
+        # STT settings removed
 
 
         if hasattr(self, 'recorder_dir_edit'): self.recorder_dir_edit.setText(ui_settings.get('recorder_dir_edit', ''))
@@ -582,15 +497,6 @@ class DSDApp(QMainWindow):
             for i, slider in enumerate(self.eq_sliders):
                 ui_settings[f'eq_band_{i}'] = slider.value()
 
-        # +++ STT Integration: Save STT settings +++
-        stt_settings = {}
-        if hasattr(self, 'stt_engine_combo'): stt_settings['engine'] = self.stt_engine_combo.currentText()
-        if hasattr(self, 'stt_whisper_model_combo'): stt_settings['whisper_model'] = self.stt_whisper_model_combo.currentText()
-        if hasattr(self, 'stt_vosk_path_edit'): stt_settings['vosk_model_path'] = self.stt_vosk_path_edit.text()
-        if hasattr(self, 'stt_lang_combo'): stt_settings['language'] = self.stt_lang_combo.currentText()
-        if hasattr(self, 'stt_enabled_check_dash'): stt_settings['enabled'] = self.stt_enabled_check_dash.isChecked()
-
-
         if hasattr(self, 'recorder_dir_edit'): ui_settings['recorder_dir_edit'] = self.recorder_dir_edit.text()
         if hasattr(self, 'volume_slider'): ui_settings['volume_slider'] = self.volume_slider.value()
 
@@ -599,7 +505,6 @@ class DSDApp(QMainWindow):
             'current_theme': self.current_theme_name,
             'alerts': self.alerts,
             'ui_settings': ui_settings,
-            'stt_settings': stt_settings, # +++ STT
         }
         with open(CONFIG_FILE, 'w') as f: json.dump(config, f, indent=4)
         self.save_aliases()
@@ -635,7 +540,6 @@ class DSDApp(QMainWindow):
         root_tabs.tabBar().setExpanding(True)
         root_tabs.addTab(self._create_config_tab(), "Configuration")
         root_tabs.addTab(self._create_dashboard_tab(), "Dashboard")
-        root_tabs.addTab(self._create_stt_tab(), "Transcription (STT)")
         root_tabs.addTab(self._create_logbook_tab(), "Logbook")
         root_tabs.addTab(self._create_aliases_tab(), "Aliases")
         root_tabs.addTab(self._create_statistics_tab(), "Statistics")
@@ -797,15 +701,12 @@ class DSDApp(QMainWindow):
             self.colormap_combo = QComboBox(); self.colormap_combo.addItems(self.colormaps.keys()); self.colormap_combo.currentTextChanged.connect(lambda name: self.imv.setColorMap(self.colormaps[name]))
             main_layout.addWidget(QLabel("Spectrogram:"), 5, 0); main_layout.addWidget(self.colormap_combo, 5, 1, 1, 2)
 
-            self.stt_enabled_check_dash = QCheckBox("Enable Transcription (STT)"); self._add_widget('stt_enabled_check_dash', self.stt_enabled_check_dash)
-            main_layout.addWidget(self.stt_enabled_check_dash, 6, 0)
-
             self.recorder_enabled_check_dash = QCheckBox("Enable Rec."); self.recorder_enabled_check_dash.toggled.connect(lambda state: self.recorder_enabled_check.setChecked(state)); self._add_widget('recorder_enabled_check_dash', self.recorder_enabled_check_dash)
-            main_layout.addWidget(self.recorder_enabled_check_dash, 7, 0)
+            main_layout.addWidget(self.recorder_enabled_check_dash, 6, 0)
 
             self.btn_start_dash = QPushButton("START"); self.btn_start_dash.clicked.connect(self.start_process)
             self.btn_stop_dash = QPushButton("STOP"); self.btn_stop_dash.setEnabled(False); self.btn_stop_dash.clicked.connect(self.stop_process)
-            main_layout.addWidget(self.btn_start_dash, 7, 1); main_layout.addWidget(self.btn_stop_dash, 7, 2)
+            main_layout.addWidget(self.btn_start_dash, 6, 1); main_layout.addWidget(self.btn_stop_dash, 6, 2)
 
         self.device_combo.currentIndexChanged.connect(self.restart_audio_stream); self.volume_slider.valueChanged.connect(self.set_volume)
         return group
@@ -897,131 +798,7 @@ class DSDApp(QMainWindow):
         except Exception as e:
             print(f"Error updating map: {e}")
 
-    def _create_stt_tab(self):
-        widget = QWidget()
-        main_layout = QHBoxLayout(widget)
 
-        settings_panel = QWidget()
-        settings_layout = QVBoxLayout(settings_panel)
-        settings_panel.setMaximumWidth(400)
-
-        engine_group = QGroupBox("STT Engine Settings")
-        engine_layout = QGridLayout(engine_group)
-
-        self.stt_engine_combo = QComboBox()
-        if WHISPER_AVAILABLE: self.stt_engine_combo.addItem("Whisper")
-        if VOSK_AVAILABLE: self.stt_engine_combo.addItem("Vosk")
-        self.stt_engine_combo.currentTextChanged.connect(self._toggle_stt_engine_options)
-
-        self.stt_lang_combo = QComboBox()
-        self.stt_lang_combo.addItems(["English", "Polish"])
-
-        engine_layout.addWidget(QLabel("Engine:"), 0, 0)
-        engine_layout.addWidget(self.stt_engine_combo, 0, 1)
-        engine_layout.addWidget(QLabel("Language:"), 1, 0)
-        engine_layout.addWidget(self.stt_lang_combo, 1, 1)
-        settings_layout.addWidget(engine_group)
-
-        self.whisper_group = QGroupBox("OpenAI-Whisper Settings")
-        whisper_layout = QGridLayout(self.whisper_group)
-        self.stt_whisper_model_combo = QComboBox()
-        self.stt_whisper_model_combo.addItems(['tiny', 'base', 'small', 'medium', 'large'])
-        self.stt_download_whisper_btn = QPushButton("Download/Verify Model")
-        self.stt_download_whisper_btn.clicked.connect(self._download_whisper_model)
-        whisper_info = QLabel('<small>Models are downloaded automatically on first use.<br><i>medium</i> and <i>large</i> models require significant RAM and disk space.</small>')
-        whisper_info.setWordWrap(True)
-
-        whisper_layout.addWidget(QLabel("Model:"), 0, 0)
-        whisper_layout.addWidget(self.stt_whisper_model_combo, 0, 1)
-        whisper_layout.addWidget(self.stt_download_whisper_btn, 1, 0, 1, 2)
-        whisper_layout.addWidget(whisper_info, 2, 0, 1, 2)
-        settings_layout.addWidget(self.whisper_group)
-
-        self.vosk_group = QGroupBox("Vosk Settings")
-        vosk_layout = QGridLayout(self.vosk_group)
-        self.stt_vosk_path_edit = QLineEdit()
-        self.stt_vosk_path_edit.setPlaceholderText("Path to the model folder")
-        self.stt_browse_vosk_btn = QPushButton("Browse...")
-        self.stt_browse_vosk_btn.clicked.connect(self._browse_for_vosk_model)
-        vosk_link = QLabel('<a href="https://alphacephei.com/vosk/models">Download Vosk models (PL/EN)</a>')
-        vosk_link.setOpenExternalLinks(True)
-
-        vosk_layout.addWidget(QLabel("Model Path:"), 0, 0)
-        vosk_layout.addWidget(self.stt_vosk_path_edit, 1, 0)
-        vosk_layout.addWidget(self.stt_browse_vosk_btn, 1, 1)
-        vosk_layout.addWidget(vosk_link, 2, 0, 1, 2)
-        settings_layout.addWidget(self.vosk_group)
-
-        history_group = QGroupBox("Transcription History")
-        history_layout = QHBoxLayout(history_group)
-        self.stt_import_btn = QPushButton("Import History")
-        self.stt_export_btn = QPushButton("Export History")
-        self.stt_import_btn.clicked.connect(self.import_stt_history)
-        self.stt_export_btn.clicked.connect(self.export_stt_history)
-        history_layout.addWidget(self.stt_import_btn)
-        history_layout.addWidget(self.stt_export_btn)
-        settings_layout.addWidget(history_group)
-
-        settings_layout.addStretch()
-
-        table_panel = QWidget()
-        table_layout = QVBoxLayout(table_panel)
-        self.stt_table = QTableWidget()
-        self.stt_table.setColumnCount(3)
-        self.stt_table.setHorizontalHeaderLabels(["Time", "Radio ID", "Transcription Text"])
-        self.stt_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.stt_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.stt_table.verticalHeader().setVisible(False)
-
-        self.stt_status_bar = QStatusBar()
-
-        table_layout.addWidget(self.stt_table)
-        table_layout.addWidget(self.stt_status_bar)
-
-        main_layout.addWidget(settings_panel)
-        main_layout.addWidget(table_panel)
-
-        self._toggle_stt_engine_options(self.stt_engine_combo.currentText())
-
-        return widget
-
-    def _toggle_stt_engine_options(self, engine_name):
-        is_whisper = (engine_name == 'Whisper')
-        is_vosk = (engine_name == 'Vosk')
-        if hasattr(self, 'whisper_group'): self.whisper_group.setVisible(is_whisper)
-        if hasattr(self, 'vosk_group'): self.vosk_group.setVisible(is_vosk)
-
-    def _browse_for_vosk_model(self):
-        path = QFileDialog.getExistingDirectory(self, "Select Vosk Model Folder")
-        if path:
-            self.stt_vosk_path_edit.setText(path)
-
-    def _download_whisper_model(self):
-        if not WHISPER_AVAILABLE:
-            QMessageBox.critical(self, "Error", "The Whisper library is not installed.")
-            return
-
-        model_name = self.stt_whisper_model_combo.currentText()
-
-        reply = QMessageBox.information(self, "Download Model",
-            f"You are about to download the Whisper model: '{model_name}'.\n"
-            f"This might take a while and consume disk space. The model will be cached for future use.\n\nContinue?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-
-        if reply == QMessageBox.Yes:
-            self.stt_status_bar.showMessage(f"Downloading Whisper model: {model_name}...")
-            QApplication.processEvents()
-
-            try:
-                # This should be in a thread for a better UX, but for now, it's a simple implementation
-                whisper.load_model(model_name)
-                self.stt_status_bar.showMessage(f"Model '{model_name}' is available locally.", 5000)
-                QMessageBox.information(self, "Success", f"Model '{model_name}' was successfully downloaded/verified.")
-            except Exception as e:
-                self.stt_status_bar.showMessage(f"Error during model download: {e}", 5000)
-                QMessageBox.critical(self, "Download Error", f"Could not download model '{model_name}':\n{e}")
-
-    #</editor-fold>
 
     #<editor-fold desc="Application Logic">
     def closeEvent(self, event):
@@ -1603,9 +1380,6 @@ class DSDApp(QMainWindow):
         self.is_in_transmission = False
         self.last_logged_id = None
         self.transmission_log.clear()
-        if hasattr(self, 'stt_table'):
-            self.stt_table.setRowCount(0)
-        self.stt_active_id_row.clear()
 
         commands = self.build_command()
         if not commands:
@@ -1788,31 +1562,10 @@ class DSDApp(QMainWindow):
 
         self.transmission_log[id_val] = {'start_time': start_time, 'tg': tg_val, 'id_alias': id_alias}
 
-        if hasattr(self, 'stt_enabled_check_dash') and self.stt_enabled_check_dash.isChecked():
-            self.stt_audio_buffer[id_val] = bytearray()
-            if id_val not in self.stt_active_id_row:
-                row_pos = self.stt_table.rowCount()
-                self.stt_table.insertRow(row_pos)
-                self.stt_table.setItem(row_pos, 0, QTableWidgetItem(start_time.strftime("%H:%M:%S")))
-                id_display = self.aliases['id'].get(id_val, id_val)
-                self.stt_table.setItem(row_pos, 1, QTableWidgetItem(id_display))
-                self.stt_table.setItem(row_pos, 2, QTableWidgetItem("..."))
-                self.stt_active_id_row[id_val] = row_pos
-                self.stt_table.scrollToBottom()
-
 
     def end_all_transmissions(self, end_current=True):
         end_time = datetime.now()
         end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
-
-        if hasattr(self, 'stt_enabled_check_dash') and self.stt_enabled_check_dash.isChecked() and self.stt_audio_buffer:
-             for radio_id, audio_buffer in self.stt_audio_buffer.items():
-                if len(audio_buffer) > AUDIO_RATE * 1: # Transcribe only if there's enough audio (e.g., > 0.5s)
-                    audio_data = np.frombuffer(audio_buffer, dtype=AUDIO_DTYPE)
-                    self.start_transcription(audio_data, radio_id)
-        if end_current:
-            self.stt_audio_buffer.clear()
-            self.stt_active_id_row.clear()
 
         for log_data in self.transmission_log.values():
             duration = end_time - log_data['start_time']; duration_str = str(duration).split('.')[0]
@@ -1866,9 +1619,6 @@ class DSDApp(QMainWindow):
         except KeyError as e:
             print(f"Filter widget not ready, skipping filtering. Error: {e}")
             filtered_samples = audio_samples
-
-        if self.is_in_transmission and self.last_logged_id and self.last_logged_id in self.stt_audio_buffer:
-            self.stt_audio_buffer[self.last_logged_id].extend(filtered_samples.tobytes())
 
         # buffer per channel
         self.channel_buffers[channel] = np.concatenate(
@@ -2220,37 +1970,6 @@ class DSDApp(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Save Error", f"Could not save CSV file:\n{e}")
 
-    def export_stt_history(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export Transcription History", "", "CSV Files (*.csv)");
-        if path:
-            try:
-                with open(path, 'w', newline='', encoding='utf-8') as f:
-                    writer = csv.writer(f)
-                    writer.writerow(["Time", "Radio ID", "Transcription Text"])
-                    for row in range(self.stt_table.rowCount()):
-                        row_data = [self.stt_table.item(row, col).text() if self.stt_table.item(row, col) else "" for col in range(self.stt_table.columnCount())]
-                        writer.writerow(row_data)
-                QMessageBox.information(self, "Success", f"Transcription history has been saved.")
-            except Exception as e:
-                QMessageBox.critical(self, "Save Error", f"Could not save CSV file:\n{e}")
-
-    def import_stt_history(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Import Transcription History", "", "CSV Files (*.csv)");
-        if path:
-            try:
-                with open(path, 'r', newline='', encoding='utf-8') as f:
-                    reader = csv.reader(f)
-                    self.stt_table.setRowCount(0)
-                    header = next(reader, None)
-                    for row_data in reader:
-                        row = self.stt_table.rowCount()
-                        self.stt_table.insertRow(row)
-                        for i, data in enumerate(row_data):
-                            self.stt_table.setItem(row, i, QTableWidgetItem(data))
-                QMessageBox.information(self, "Success", "Transcription history has been imported.")
-            except Exception as e:
-                QMessageBox.critical(self, "Import Error", f"Could not import CSV file:\n{e}")
-
     def add_alert(self):
         alert_type = "TG" if self.alert_type_combo.currentText() == "Talkgroup (TG)" else "ID"; value = self.alert_value_edit.text().strip(); sound = self.alert_sound_edit.text().strip() or "Default"
         if not value: QMessageBox.warning(self, "Input Error", "Value cannot be empty."); return
@@ -2307,48 +2026,6 @@ class DSDApp(QMainWindow):
             print(f"Error opening audio stream: {e}")
 
     def set_volume(self, value): self.volume = value / 100.0
-
-    def start_transcription(self, audio_data, radio_id):
-        if self.transcription_thread and self.transcription_thread.isRunning():
-            print("Transcription already in progress, skipping...")
-            return
-
-        stt_settings = {
-            'engine': self.stt_engine_combo.currentText(),
-            'language': self.stt_lang_combo.currentText(),
-            'whisper_model': self.stt_whisper_model_combo.currentText(),
-            'vosk_model_path': self.stt_vosk_path_edit.text()
-        }
-
-        self.transcription_thread = QThread()
-        self.transcription_worker = TranscriptionWorker(audio_data, radio_id, stt_settings)
-        self.transcription_worker.moveToThread(self.transcription_thread)
-
-        self.transcription_thread.started.connect(self.transcription_worker.run)
-        self.transcription_worker.finished.connect(self.update_stt_table)
-        self.transcription_worker.finished.connect(self.transcription_thread.quit)
-        self.transcription_worker.finished.connect(self.transcription_worker.deleteLater)
-        self.transcription_thread.finished.connect(self.transcription_thread.deleteLater)
-
-        if hasattr(self, 'stt_status_bar'):
-             self.transcription_worker.progress.connect(self.stt_status_bar.showMessage)
-
-        self.transcription_thread.start()
-
-    @pyqtSlot(str, str)
-    def update_stt_table(self, radio_id, text):
-        if radio_id in self.stt_active_id_row:
-            row = self.stt_active_id_row[radio_id]
-            current_item = self.stt_table.item(row, 2)
-            if current_item: # Check if item exists
-                current_text = current_item.text()
-                if current_text == "...":
-                    current_item.setText(text)
-                else:
-                    current_item.setText(f"{current_text} {text}")
-        if hasattr(self, 'stt_status_bar'):
-            self.stt_status_bar.clearMessage()
-
 
     def apply_filters(self, samples):
         samples_float = samples.astype(np.float32)
