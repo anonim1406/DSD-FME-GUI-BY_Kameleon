@@ -20,19 +20,6 @@ else:
     APP_DATA_DIR = os.path.join(os.path.expanduser('~'), '.config', APP_NAME)
 os.makedirs(APP_DATA_DIR, exist_ok=True)
 
-# +++ STT Integration +++
-try:
-    import whisper
-    WHISPER_AVAILABLE = True
-except ImportError:
-    WHISPER_AVAILABLE = False
-
-try:
-    from vosk import Model as VoskModel, KaldiRecognizer
-    VOSK_AVAILABLE = True
-except ImportError:
-    VOSK_AVAILABLE = False
-
 
 def resource_path(relative_path):
     try:
@@ -97,68 +84,6 @@ WAV_CHANNELS = 2; WAV_SAMPWIDTH = 2
 class IntegerAxis(AxisItem):
     def tickStrings(self, values, scale, spacing):
         return [f'{int(v)}' for v in values]
-
-# +++ STT Integration: Transcription Worker +++
-class TranscriptionWorker(QObject):
-    finished = pyqtSignal(str, str)
-    progress = pyqtSignal(str)
-
-    def __init__(self, audio_data, radio_id, stt_settings):
-        super().__init__()
-        self.audio_data = audio_data
-        self.radio_id = radio_id
-        self.settings = stt_settings
-
-    @pyqtSlot()
-    def run(self):
-        engine = self.settings.get('engine')
-        result_text = f"[{engine} Error]"
-
-        try:
-            if engine == 'Whisper' and WHISPER_AVAILABLE:
-                result_text = self.transcribe_whisper()
-            elif engine == 'Vosk' and VOSK_AVAILABLE:
-                result_text = self.transcribe_vosk()
-            else:
-                result_text = "[STT Engine not available]"
-        except Exception as e:
-            result_text = f"[Transcription failed: {e}]"
-            print(f"Transcription error for ID {self.radio_id}: {e}")
-
-        self.finished.emit(self.radio_id, result_text)
-
-    def transcribe_whisper(self):
-        model_name = self.settings.get('whisper_model', 'tiny')
-        language = self.settings.get('language', 'English')
-        lang_map = {'Polish': 'pl', 'English': 'en'}
-
-        self.progress.emit(f"Loading Whisper model: {model_name}...")
-        model = whisper.load_model(model_name)
-
-        self.progress.emit(f"Transcribing audio for ID: {self.radio_id}...")
-        # Whisper expects float32 array normalized to [-1.0, 1.0]
-        audio_float = self.audio_data.astype(np.float32) / 32768.0
-        result = model.transcribe(audio_float, language=lang_map.get(language, 'en'))
-
-        self.progress.emit("Transcription complete.")
-        return result['text'].strip()
-
-    def transcribe_vosk(self):
-        model_path = self.settings.get('vosk_model_path')
-        if not model_path or not os.path.exists(model_path):
-            return "[Vosk model path not set or invalid]"
-
-        self.progress.emit(f"Loading Vosk model from: {model_path}...")
-        model = VoskModel(model_path)
-        rec = KaldiRecognizer(model, AUDIO_RATE)
-        rec.SetWords(True)
-
-        self.progress.emit(f"Transcribing audio for ID: {self.radio_id}...")
-        rec.AcceptWaveform(self.audio_data.tobytes())
-        result = json.loads(rec.FinalResult())
-
-        self.progress.emit("Transcription complete.")
-        return result.get('text', '')
 
 class AudioProcessingWindow(QDialog):
     def __init__(self, parent=None):
@@ -297,19 +222,19 @@ class AudioProcessingWindow(QDialog):
         self.main_app.widgets['nr_strength_slider'].setValue(50)
 
 class ProcessReader(QObject):
-    line_read = pyqtSignal(str)
+    line_read = pyqtSignal(int, str)
     finished = pyqtSignal()
 
-    def __init__(self, process):
+    def __init__(self, process, index):
         super().__init__()
         self.process = process
+        self.index = index
 
     @pyqtSlot()
     def run(self):
         if self.process and self.process.stdout:
             for line in iter(self.process.stdout.readline, ''):
-                self.line_read.emit(line)
-        # When the loop finishes (process terminates), emit the finished signal
+                self.line_read.emit(self.index, line)
         self.finished.emit()
 
 class UdpListener(QObject):
@@ -362,11 +287,6 @@ class DSDApp(QMainWindow):
         self.fs_watcher = QFileSystemWatcher(); self.fs_watcher.directoryChanged.connect(self.update_recording_list)
         self.lrrp_watcher = QFileSystemWatcher()
         self.lrrp_watcher.fileChanged.connect(self.update_map_from_lrrp)
-        # +++ STT Integration +++
-        self.stt_audio_buffer = {}
-        self.stt_active_id_row = {}
-        self.transcription_thread = None
-        self.transcription_worker = None
 
         self.setWindowTitle("DSD-FME-GUI-BY Kameleon v3.0")
         self.setGeometry(100, 100, 1600, 950)
@@ -427,68 +347,75 @@ class DSDApp(QMainWindow):
 
     def _get_dark_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor(21, 25, 28)); p.setColor(QPalette.WindowText, QColor(224, 224, 224)); p.setColor(QPalette.Base, QColor(30, 35, 40)); p.setColor(QPalette.AlternateBase, QColor(44, 52, 58)); p.setColor(QPalette.ToolTipBase, Qt.white); p.setColor(QPalette.ToolTipText, Qt.black); p.setColor(QPalette.Text, QColor(224, 224, 224)); p.setColor(QPalette.Button, QColor(44, 52, 58)); p.setColor(QPalette.ButtonText, QColor(224, 224, 224)); p.setColor(QPalette.BrightText, Qt.red); p.setColor(QPalette.Link, QColor(255, 170, 0)); p.setColor(QPalette.Highlight, QColor(255, 170, 0)); p.setColor(QPalette.HighlightedText, Qt.black); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
+    def _common_stylesheet(self):
+        return (
+            "QGroupBox{margin-top:1ex;border-radius:6px;}"
+            "QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;}"
+            "QPushButton{border-radius:5px;padding:6px 12px;}"
+            "QLineEdit,QSpinBox,QComboBox,QTableWidget,QPlainTextEdit{border-radius:4px;padding:4px;}"
+        )
     def _get_dark_stylesheet(self):
         return """
             QWidget{color:#e0e0e0;font-size:9pt} QGroupBox{font-weight:bold;border:1px solid #3a4149;border-radius:6px;margin-top:1ex; background-color: #1e2328;} QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#15191c} QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #3a4149;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2c343a,stop:1 #242b30)} QPushButton:hover{background-color:#3e4850;border:1px solid #ffaa00} QPushButton:pressed{background-color:#242b30} QPushButton:disabled{color:#777;background-color:#242b30;border:1px solid #3a4149} QTabWidget::pane{border-top:2px solid #3a4149} QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#1e2328;border:1px solid #3a4149;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px} QTabBar::tab:selected{background-color:#2c343a;border:1px solid #ffaa00;border-bottom:none} QTabBar::tab:!selected:hover{background-color:#353e44} QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit,QPlainTextEdit,QListView{border-radius:4px;border:1px solid #3a4149;padding:4px} QPlainTextEdit{color:#33FF33;font-family:Consolas,monospace} QSlider::groove:horizontal{border:1px solid #3a4149;height:8px;background:#242b30;border-radius:4px} QSlider::handle:horizontal{background:#ffaa00;border:1px solid #ffaa00;width:18px;margin:-2px 0;border-radius:9px} QHeaderView::section{background-color:#2c343a;color:#e0e0e0;padding:4px;border:1px solid #3a4149;font-weight:bold} QTableWidget{gridline-color:#3a4149;}
-        """
+        """ + self._common_stylesheet()
     def _get_matrix_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#020f03")); p.setColor(QPalette.WindowText, QColor("#00ff41")); p.setColor(QPalette.Base, QColor("#051803")); p.setColor(QPalette.AlternateBase, QColor("#0a2808")); p.setColor(QPalette.Text, QColor("#33ff77")); p.setColor(QPalette.Button, QColor("#0a2808")); p.setColor(QPalette.ButtonText, QColor("#00ff41")); p.setColor(QPalette.Highlight, QColor("#00ff41")); p.setColor(QPalette.HighlightedText, Qt.black); p.setColor(QPalette.Link, QColor("#66ff99")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
     def _get_matrix_stylesheet(self):
-        return "QWidget{font-family:'Courier New',monospace;color:#00ff41;background-color:#020f03;}QGroupBox{border:1px solid #00ff41;background-color:#051803;}QGroupBox::title{background-color:#020f03;}QPushButton{border:1px solid #00ff41;background-color:#103010;}QPushButton:hover{background-color:#205020;}QTabBar::tab{padding:8px;border:1px solid #008000;border-bottom:none;background:#051803;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#205020;border-color:#00ff41;}QTabBar::tab:!selected:hover{background:#104010;}QSlider::handle:horizontal{background:#00ff41;}QTableWidget{gridline-color:#008000;border:1px solid #00ff41;}QHeaderView::section{background-color:#103010;border:1px solid #00ff41;}"
+        return "QWidget{font-family:'Courier New',monospace;color:#00ff41;background-color:#020f03;}QGroupBox{border:1px solid #00ff41;background-color:#051803;}QGroupBox::title{background-color:#020f03;}QPushButton{border:1px solid #00ff41;background-color:#103010;}QPushButton:hover{background-color:#205020;}QTabBar::tab{padding:8px;border:1px solid #008000;border-bottom:none;background:#051803;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#205020;border-color:#00ff41;}QTabBar::tab:!selected:hover{background:#104010;}QSlider::handle:horizontal{background:#00ff41;}QTableWidget{gridline-color:#008000;border:1px solid #00ff41;}QHeaderView::section{background-color:#103010;border:1px solid #00ff41;}" + self._common_stylesheet()
 
     def _get_cyberpunk_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#0c0c28")); p.setColor(QPalette.WindowText, QColor("#f7f722")); p.setColor(QPalette.Base, QColor("#141434")); p.setColor(QPalette.AlternateBase, QColor("#222248")); p.setColor(QPalette.Text, QColor("#ffffff")); p.setColor(QPalette.Button, QColor("#141434")); p.setColor(QPalette.ButtonText, QColor("#f7f722")); p.setColor(QPalette.Highlight, QColor("#f7f722")); p.setColor(QPalette.HighlightedText, QColor("#0c0c28")); p.setColor(QPalette.Link, QColor("#ff00ff")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
     def _get_cyberpunk_stylesheet(self):
-        return "QWidget{color:#f7f722;background-color:#0c0c28;}QGroupBox{border:1px solid #ff00ff;background-color:#141434;}QGroupBox::title{background-color:#0c0c28;}QPushButton{border:1px solid #ff00ff;background-color:#202050;}QPushButton:hover{background-color:#303070;}QTabBar::tab{padding:8px;border:1px solid #ff00ff;border-bottom:none;background:#141434;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#303070;border-color:#f7f722;}QTabBar::tab:!selected:hover{background:#303070;}QSlider::handle:horizontal{background:#f7f722;}QTableWidget{gridline-color:#ff00ff;border:1px solid #f7f722;}QHeaderView::section{background-color:#202050;border:1px solid #ff00ff;}"
+        return "QWidget{color:#f7f722;background-color:#0c0c28;}QGroupBox{border:1px solid #ff00ff;background-color:#141434;}QGroupBox::title{background-color:#0c0c28;}QPushButton{border:1px solid #ff00ff;background-color:#202050;}QPushButton:hover{background-color:#303070;}QTabBar::tab{padding:8px;border:1px solid #ff00ff;border-bottom:none;background:#141434;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#303070;border-color:#f7f722;}QTabBar::tab:!selected:hover{background:#303070;}QSlider::handle:horizontal{background:#f7f722;}QTableWidget{gridline-color:#ff00ff;border:1px solid #f7f722;}QHeaderView::section{background-color:#202050;border:1px solid #ff00ff;}" + self._common_stylesheet()
 
     def _get_neon_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#101018")); p.setColor(QPalette.WindowText, QColor("#f000ff")); p.setColor(QPalette.Base, QColor("#181828")); p.setColor(QPalette.AlternateBase, QColor("#202030")); p.setColor(QPalette.Text, QColor("#00ffff")); p.setColor(QPalette.Button, QColor("#202030")); p.setColor(QPalette.ButtonText, QColor("#f000ff")); p.setColor(QPalette.Highlight, QColor("#f000ff")); p.setColor(QPalette.HighlightedText, Qt.black); p.setColor(QPalette.Link, QColor("#00ffff")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
     def _get_neon_stylesheet(self):
-        return "QWidget{color:#00ffff;background-color:#101018;}QGroupBox{border:1px solid #f000ff;background-color:#181828;}QGroupBox::title{background-color:#101018;}QPushButton{border:1px solid #f000ff;background-color:#251530;}QPushButton:hover{background-color:#352040;}QTabBar::tab{padding:8px;border:1px solid #f000ff;border-bottom:none;background:#181828;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#251530;border-color:#00ffff;}QTabBar::tab:!selected:hover{background:#352040;}QSlider::handle:horizontal{background:#00ffff;}QTableWidget{gridline-color:#f000ff;border:1px solid #00ffff;}QHeaderView::section{background-color:#251530;border:1px solid #f000ff;}"
+        return "QWidget{color:#00ffff;background-color:#101018;}QGroupBox{border:1px solid #f000ff;background-color:#181828;}QGroupBox::title{background-color:#101018;}QPushButton{border:1px solid #f000ff;background-color:#251530;}QPushButton:hover{background-color:#352040;}QTabBar::tab{padding:8px;border:1px solid #f000ff;border-bottom:none;background:#181828;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#251530;border-color:#00ffff;}QTabBar::tab:!selected:hover{background:#352040;}QSlider::handle:horizontal{background:#00ffff;}QTableWidget{gridline-color:#f000ff;border:1px solid #00ffff;}QHeaderView::section{background-color:#251530;border:1px solid #f000ff;}" + self._common_stylesheet()
 
     def _get_retro_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#212121")); p.setColor(QPalette.WindowText, QColor("#eeeeee")); p.setColor(QPalette.Base, QColor("#303030")); p.setColor(QPalette.AlternateBase, QColor("#424242")); p.setColor(QPalette.Text, QColor("#eeeeee")); p.setColor(QPalette.Button, QColor("#424242")); p.setColor(QPalette.ButtonText, QColor("#eeeeee")); p.setColor(QPalette.Highlight, QColor("#ff5722")); p.setColor(QPalette.HighlightedText, QColor("#212121")); p.setColor(QPalette.Link, QColor("#ffc107")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
     def _get_retro_stylesheet(self):
-        return "QWidget{font-family:'Press Start 2P',cursive;color:#eeeeee;background-color:#212121;}QGroupBox{border:1px solid #ff5722;background-color:#303030;}QGroupBox::title{background-color:#212121;}QPushButton{border:1px solid #ffc107;background-color:#424242;}QTabBar::tab{padding:8px;border:1px solid #ffc107;border-bottom:none;background:#303030;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#424242;border-color:#ff5722;}QTabBar::tab:!selected:hover{background:#505050;}QSlider::handle:horizontal{background:#ffc107;}QTableWidget{gridline-color:#ff5722;border:1px solid #ffc107;}QHeaderView::section{background-color:#424242;border:1px solid #ffc107;}"
+        return "QWidget{font-family:'Press Start 2P',cursive;color:#eeeeee;background-color:#212121;}QGroupBox{border:1px solid #ff5722;background-color:#303030;}QGroupBox::title{background-color:#212121;}QPushButton{border:1px solid #ffc107;background-color:#424242;}QTabBar::tab{padding:8px;border:1px solid #ffc107;border-bottom:none;background:#303030;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#424242;border-color:#ff5722;}QTabBar::tab:!selected:hover{background:#505050;}QSlider::handle:horizontal{background:#ffc107;}QTableWidget{gridline-color:#ff5722;border:1px solid #ffc107;}QHeaderView::section{background-color:#424242;border:1px solid #ffc107;}" + self._common_stylesheet()
 
     def _get_military_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#1a2418")); p.setColor(QPalette.WindowText, QColor("#a2b59f")); p.setColor(QPalette.Base, QColor("#253522")); p.setColor(QPalette.AlternateBase, QColor("#354831")); p.setColor(QPalette.Text, QColor("#c2d0bd")); p.setColor(QPalette.Button, QColor("#354831")); p.setColor(QPalette.ButtonText, QColor("#a2b59f")); p.setColor(QPalette.Highlight, QColor("#849b80")); p.setColor(QPalette.HighlightedText, QColor("#1a2418")); p.setColor(QPalette.Link, QColor("#c2d0bd")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
     def _get_military_stylesheet(self):
-        return "QWidget{color:#a2b59f;background-color:#1a2418;}QGroupBox{border:1px solid #4a5e46;background-color:#253522;}QGroupBox::title{background-color:#1a2418;}QPushButton{border:1px solid #667b62;background-color:#354831;}QTabBar::tab{padding:8px;border:1px solid #4a5e46;border-bottom:none;background:#253522;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#354831;border-color:#849b80;}QTabBar::tab:!selected:hover{background:#354831;}QSlider::handle:horizontal{background:#849b80;}QTableWidget{gridline-color:#4a5e46;border:1px solid #667b62;}QHeaderView::section{background-color:#354831;border:1px solid #4a5e46;}"
+        return "QWidget{color:#a2b59f;background-color:#1a2418;}QGroupBox{border:1px solid #4a5e46;background-color:#253522;}QGroupBox::title{background-color:#1a2418;}QPushButton{border:1px solid #667b62;background-color:#354831;}QTabBar::tab{padding:8px;border:1px solid #4a5e46;border-bottom:none;background:#253522;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#354831;border-color:#849b80;}QTabBar::tab:!selected:hover{background:#354831;}QSlider::handle:horizontal{background:#849b80;}QTableWidget{gridline-color:#4a5e46;border:1px solid #667b62;}QHeaderView::section{background-color:#354831;border:1px solid #4a5e46;}" + self._common_stylesheet()
 
     def _get_arctic_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#e8eef2")); p.setColor(QPalette.WindowText, QColor("#1c2e4a")); p.setColor(QPalette.Base, QColor("#fdfdfe")); p.setColor(QPalette.AlternateBase, QColor("#dce4ea")); p.setColor(QPalette.Text, QColor("#2c3e50")); p.setColor(QPalette.Button, QColor("#dce4ea")); p.setColor(QPalette.ButtonText, QColor("#1c2e4a")); p.setColor(QPalette.Highlight, QColor("#3498db")); p.setColor(QPalette.HighlightedText, Qt.white); p.setColor(QPalette.Link, QColor("#2980b9")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
     def _get_arctic_stylesheet(self):
-        return "QWidget{color:#2c3e50;background-color:#e8eef2;}QGroupBox{border:1px solid #bdc3c7;background-color:#f8f9fa;}QGroupBox::title{background-color:#e8eef2;}QPushButton{border:1px solid #bdc3c7;background-color:#ecf0f1;}QTabBar::tab{padding:8px;border:1px solid #bdc3c7;border-bottom:none;background:#ecf0f1;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:white;border-color:#3498db;}QTabBar::tab:!selected:hover{background:#f0f5f9;}QSlider::handle:horizontal{background:#3498db;}QTableWidget{gridline-color:#bdc3c7;border:1px solid #bdc3c7;}QHeaderView::section{background-color:#ecf0f1;border:1px solid #bdc3c7;}"
+        return "QWidget{color:#2c3e50;background-color:#e8eef2;}QGroupBox{border:1px solid #bdc3c7;background-color:#f8f9fa;}QGroupBox::title{background-color:#e8eef2;}QPushButton{border:1px solid #bdc3c7;background-color:#ecf0f1;}QTabBar::tab{padding:8px;border:1px solid #bdc3c7;border-bottom:none;background:#ecf0f1;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:white;border-color:#3498db;}QTabBar::tab:!selected:hover{background:#f0f5f9;}QSlider::handle:horizontal{background:#3498db;}QTableWidget{gridline-color:#bdc3c7;border:1px solid #bdc3c7;}QHeaderView::section{background-color:#ecf0f1;border:1px solid #bdc3c7;}" + self._common_stylesheet()
 
     def _get_solarized_dark_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#002b36")); p.setColor(QPalette.WindowText, QColor("#839496")); p.setColor(QPalette.Base, QColor("#073642")); p.setColor(QPalette.AlternateBase, QColor("#002b36")); p.setColor(QPalette.Text, QColor("#839496")); p.setColor(QPalette.Button, QColor("#073642")); p.setColor(QPalette.ButtonText, QColor("#839496")); p.setColor(QPalette.Highlight, QColor("#268bd2")); p.setColor(QPalette.HighlightedText, QColor("#002b36")); p.setColor(QPalette.Link, QColor("#2aa198")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
     def _get_solarized_dark_stylesheet(self):
-        return "QWidget{color:#839496;background-color:#002b36;}QGroupBox{border:1px solid #586e75;background-color:#073642;}QGroupBox::title{background-color:#002b36;}QPushButton{border:1px solid #586e75;background-color:#073642;}QTabBar::tab{padding:8px;border:1px solid #586e75;border-bottom:none;background:#073642;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#002b36;border-color:#268bd2;}QTabBar::tab:!selected:hover{background:#08404f;}QSlider::handle:horizontal{background:#268bd2;}QTableWidget{gridline-color:#586e75;border:1px solid #586e75;}QHeaderView::section{background-color:#073642;border:1px solid #586e75;}"
+        return "QWidget{color:#839496;background-color:#002b36;}QGroupBox{border:1px solid #586e75;background-color:#073642;}QGroupBox::title{background-color:#002b36;}QPushButton{border:1px solid #586e75;background-color:#073642;}QTabBar::tab{padding:8px;border:1px solid #586e75;border-bottom:none;background:#073642;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#002b36;border-color:#268bd2;}QTabBar::tab:!selected:hover{background:#08404f;}QSlider::handle:horizontal{background:#268bd2;}QTableWidget{gridline-color:#586e75;border:1px solid #586e75;}QHeaderView::section{background-color:#073642;border:1px solid #586e75;}" + self._common_stylesheet()
 
     def _get_dracula_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#282a36")); p.setColor(QPalette.WindowText, QColor("#f8f8f2")); p.setColor(QPalette.Base, QColor("#1e1f29")); p.setColor(QPalette.AlternateBase, QColor("#44475a")); p.setColor(QPalette.Text, QColor("#f8f8f2")); p.setColor(QPalette.Button, QColor("#44475a")); p.setColor(QPalette.ButtonText, QColor("#f8f8f2")); p.setColor(QPalette.Highlight, QColor("#bd93f9")); p.setColor(QPalette.HighlightedText, QColor("#282a36")); p.setColor(QPalette.Link, QColor("#8be9fd")); p.setColor(QPalette.Disabled, QPalette.Text, Qt.darkGray); p.setColor(QPalette.Disabled, QPalette.ButtonText, Qt.darkGray); return p
     def _get_dracula_stylesheet(self):
-        return "QWidget{color:#f8f8f2;background-color:#282a36;}QGroupBox{border:1px solid #bd93f9;background-color:#1e1f29;}QGroupBox::title{background:#282a36;}QPushButton{border:1px solid #6272a4;background-color:#44475a;}QTabBar::tab{padding:8px;border:1px solid #6272a4;border-bottom:none;background:#282a36;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#44475a;border-color:#bd93f9;}QTabBar::tab:!selected:hover{background:#515469;}QSlider::handle:horizontal{background:#bd93f9;}QTableWidget{gridline-color:#6272a4;border:1px solid #bd93f9;}QHeaderView::section{background-color:#44475a;border:1px solid #6272a4;}"
+        return "QWidget{color:#f8f8f2;background-color:#282a36;}QGroupBox{border:1px solid #bd93f9;background-color:#1e1f29;}QGroupBox::title{background:#282a36;}QPushButton{border:1px solid #6272a4;background-color:#44475a;}QTabBar::tab{padding:8px;border:1px solid #6272a4;border-bottom:none;background:#282a36;border-top-left-radius:5px;border-top-right-radius:5px;}QTabBar::tab:selected{background:#44475a;border-color:#bd93f9;}QTabBar::tab:!selected:hover{background:#515469;}QSlider::handle:horizontal{background:#bd93f9;}QTableWidget{gridline-color:#6272a4;border:1px solid #bd93f9;}QHeaderView::section{background-color:#44475a;border:1px solid #6272a4;}" + self._common_stylesheet()
 
     def _get_red_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#100000")); p.setColor(QPalette.WindowText, QColor("#ff4444")); p.setColor(QPalette.Base, QColor("#180000")); p.setColor(QPalette.AlternateBase, QColor("#281010")); p.setColor(QPalette.ToolTipBase, Qt.white); p.setColor(QPalette.ToolTipText, Qt.black); p.setColor(QPalette.Text, QColor("#ff4444")); p.setColor(QPalette.Button, QColor("#400000")); p.setColor(QPalette.ButtonText, QColor("#ff6666")); p.setColor(QPalette.BrightText, QColor("#ff8888")); p.setColor(QPalette.Link, QColor("#ff2222")); p.setColor(QPalette.Highlight, QColor("#D00000")); p.setColor(QPalette.HighlightedText, Qt.white); p.setColor(QPalette.Disabled, QPalette.Text, QColor("#805050")); p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#805050")); return p
     def _get_red_stylesheet(self):
         return """
             QWidget{color:#ff4444;font-size:9pt; background-color: #100000} QGroupBox{font-weight:bold;border:1px solid #502020;border-radius:6px;margin-top:1ex; background-color: #180000;} QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#100000} QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #502020;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #400000,stop:1 #300000)} QPushButton:hover{background-color:#600000;border:1px solid #ff4444} QPushButton:pressed{background-color:#300000} QPushButton:disabled{color:#805050;background-color:#200000;border:1px solid #402020} QTabWidget::pane{border-top:2px solid #502020} QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#300000;border:1px solid #502020;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px} QTabBar::tab:selected{background-color:#400000;border:1px solid #ff4444;border-bottom:none} QTabBar::tab:!selected:hover{background-color:#500000} QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit{border-radius:4px;border:1px solid #502020;padding:4px;} QPlainTextEdit{border-radius:4px;border:1px solid #502020;padding:4px;color:#FF5555;font-family:Consolas,monospace} QSlider::groove:horizontal{border:1px solid #502020;height:8px;background:#300000;border-radius:4px} QSlider::handle:horizontal{background:#D00000;border:1px solid #ff4444;width:18px;margin:-2px 0;border-radius:9px} QHeaderView::section{background-color:#400000;color:#ff6666;padding:4px;border:1px solid #502020;font-weight:bold} QTableWidget{gridline-color:#502020;}
-        """
+        """ + self._common_stylesheet()
     def _get_blue_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#0B1D28")); p.setColor(QPalette.WindowText, QColor("#E0FFFF")); p.setColor(QPalette.Base, QColor("#112A3D")); p.setColor(QPalette.AlternateBase, QColor("#183852")); p.setColor(QPalette.ToolTipBase, Qt.white); p.setColor(QPalette.ToolTipText, Qt.black); p.setColor(QPalette.Text, QColor("#E0FFFF")); p.setColor(QPalette.Button, QColor("#113048")); p.setColor(QPalette.ButtonText, QColor("#E0FFFF")); p.setColor(QPalette.BrightText, QColor("#90EE90")); p.setColor(QPalette.Link, QColor("#00BFFF")); p.setColor(QPalette.Highlight, QColor("#007BA7")); p.setColor(QPalette.HighlightedText, Qt.white); p.setColor(QPalette.Disabled, QPalette.Text, QColor("#607A8B")); p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#607A8B")); return p
     def _get_blue_stylesheet(self):
         return """
             QWidget{color:#E0FFFF;font-size:9pt; background-color:#0B1D28} QGroupBox{font-weight:bold;border:1px solid #204D6B;border-radius:6px;margin-top:1ex; background-color:#112A3D} QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#0B1D28} QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #204D6B;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #183852,stop:1 #112A3D)} QPushButton:hover{background-color:#204D6B;border:1px solid #00BFFF} QPushButton:pressed{background-color:#112A3D} QPushButton:disabled{color:#607A8B;background-color:#112A3D;border:1px solid #204D6B} QTabWidget::pane{border-top:2px solid #204D6B} QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#112A3D;border:1px solid #204D6B;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px} QTabBar::tab:selected{background-color:#183852;border:1px solid #00BFFF;border-bottom:none} QTabBar::tab:!selected:hover{background-color:#204D6B} QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit{border-radius:4px;border:1px solid #204D6B;padding:4px;} QPlainTextEdit{border-radius:4px;border:1px solid #204D6B;padding:4px;background-color:#08141b;color:#A0FFFF;font-family:Consolas,monospace} QSlider::groove:horizontal{border:1px solid #204D6B;height:8px;background:#112A3D;border-radius:4px} QSlider::handle:horizontal{background:#007BA7;border:1px solid #00BFFF;width:18px;margin:-2px 0;border-radius:9px} QHeaderView::section{background-color:#183852;color:#E0FFFF;padding:4px;border:1px solid #204D6B;font-weight:bold} QTableWidget{gridline-color:#204D6B;}
-        """
+        """ + self._common_stylesheet()
     def _get_light_palette(self):
         p = QPalette(); p.setColor(QPalette.Window, QColor("#F0F0F0")); p.setColor(QPalette.WindowText, QColor("#000000")); p.setColor(QPalette.Base, QColor("#FFFFFF")); p.setColor(QPalette.AlternateBase, QColor("#E8E8E8")); p.setColor(QPalette.ToolTipBase, QColor("#333333")); p.setColor(QPalette.ToolTipText, QColor("#FFFFFF")); p.setColor(QPalette.Text, QColor("#000000")); p.setColor(QPalette.Button, QColor("#E0E0E0")); p.setColor(QPalette.ButtonText, QColor("#000000")); p.setColor(QPalette.BrightText, Qt.red); p.setColor(QPalette.Link, QColor("#0000FF")); p.setColor(QPalette.Highlight, QColor("#0078D7")); p.setColor(QPalette.HighlightedText, Qt.white); p.setColor(QPalette.Disabled, QPalette.Text, QColor("#A0A0A0")); p.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#A0A0A0")); return p
     def _get_light_stylesheet(self):
         return """
             QWidget{color:#000000;font-size:9pt} QGroupBox{font-weight:bold;border:1px solid #C0C0C0;border-radius:6px;margin-top:1ex;background-color:#F0F0F0} QGroupBox::title{subcontrol-origin:margin;subcontrol-position:top left;padding:0 5px;left:10px;background-color:#F0F0F0} QPushButton{font-weight:bold;border-radius:5px;padding:6px 12px;border:1px solid #C0C0C0;background-color:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #FDFDFD,stop:1 #E8E8E8)} QPushButton:hover{background-color:#E0E8F0;border:1px solid #0078D7} QPushButton:pressed{background-color:#D8E0E8} QPushButton:disabled{color:#A0A0A0;background-color:#E8E8E8;border:1px solid #D0D0D0} QTabWidget::pane{border-top:2px solid #C0C0C0} QTabBar::tab{font-weight:bold;font-size:9pt;padding:8px;min-width:130px;max-width:130px;background-color:#E8E8E8;border:1px solid #C0C0C0;border-bottom:none;border-top-left-radius:5px;border-top-right-radius:5px} QTabBar::tab:selected{background-color:#FFFFFF;border:1px solid #0078D7;border-bottom-color:#FFFFFF} QTabBar::tab:!selected:hover{background-color:#F0F8FF} QLineEdit,QSpinBox,QComboBox,QTableWidget,QDateEdit{border-radius:4px;border:1px solid #C0C0C0;padding:4px;background-color:#FFFFFF} QPlainTextEdit{border-radius:4px;border:1px solid #C0C0C0;padding:4px;background-color:#F8FFF8;color:#006400;font-family:Consolas,monospace} QSlider::groove:horizontal{border:1px solid #C0C0C0;height:8px;background:#E8E8E8;border-radius:4px} QSlider::handle:horizontal{background:#0078D7;border:1px solid #0078D7;width:18px;margin:-2px 0;border-radius:9px} QHeaderView::section{background-color:#E0E0E0;color:#000000;padding:4px;border:1px solid #C0C0C0;font-weight:bold}
-        """
+        """ + self._common_stylesheet()
     #</editor-fold>
 
     #<editor-fold desc="Configuration Management">
@@ -555,12 +482,7 @@ class DSDApp(QMainWindow):
                     print(f"Warning: Could not load UI setting for '{key}': {e}")
 
         # +++ STT Integration: Load STT settings +++
-        stt_settings = config.get('stt_settings', {})
-        if hasattr(self, 'stt_engine_combo'): self.stt_engine_combo.setCurrentText(stt_settings.get('engine', 'Whisper'))
-        if hasattr(self, 'stt_whisper_model_combo'): self.stt_whisper_model_combo.setCurrentText(stt_settings.get('whisper_model', 'tiny'))
-        if hasattr(self, 'stt_vosk_path_edit'): self.stt_vosk_path_edit.setText(stt_settings.get('vosk_model_path', ''))
-        if hasattr(self, 'stt_lang_combo'): self.stt_lang_combo.setCurrentText(stt_settings.get('language', 'English'))
-        if hasattr(self, 'stt_enabled_check_dash'): self.stt_enabled_check_dash.setChecked(stt_settings.get('enabled', False))
+        # STT settings removed
 
 
         if hasattr(self, 'recorder_dir_edit'): self.recorder_dir_edit.setText(ui_settings.get('recorder_dir_edit', ''))
@@ -582,15 +504,6 @@ class DSDApp(QMainWindow):
             for i, slider in enumerate(self.eq_sliders):
                 ui_settings[f'eq_band_{i}'] = slider.value()
 
-        # +++ STT Integration: Save STT settings +++
-        stt_settings = {}
-        if hasattr(self, 'stt_engine_combo'): stt_settings['engine'] = self.stt_engine_combo.currentText()
-        if hasattr(self, 'stt_whisper_model_combo'): stt_settings['whisper_model'] = self.stt_whisper_model_combo.currentText()
-        if hasattr(self, 'stt_vosk_path_edit'): stt_settings['vosk_model_path'] = self.stt_vosk_path_edit.text()
-        if hasattr(self, 'stt_lang_combo'): stt_settings['language'] = self.stt_lang_combo.currentText()
-        if hasattr(self, 'stt_enabled_check_dash'): stt_settings['enabled'] = self.stt_enabled_check_dash.isChecked()
-
-
         if hasattr(self, 'recorder_dir_edit'): ui_settings['recorder_dir_edit'] = self.recorder_dir_edit.text()
         if hasattr(self, 'volume_slider'): ui_settings['volume_slider'] = self.volume_slider.value()
 
@@ -599,7 +512,6 @@ class DSDApp(QMainWindow):
             'current_theme': self.current_theme_name,
             'alerts': self.alerts,
             'ui_settings': ui_settings,
-            'stt_settings': stt_settings, # +++ STT
         }
         with open(CONFIG_FILE, 'w') as f: json.dump(config, f, indent=4)
         self.save_aliases()
@@ -635,7 +547,6 @@ class DSDApp(QMainWindow):
         root_tabs.tabBar().setExpanding(True)
         root_tabs.addTab(self._create_config_tab(), "Configuration")
         root_tabs.addTab(self._create_dashboard_tab(), "Dashboard")
-        root_tabs.addTab(self._create_stt_tab(), "Transcription (STT)")
         root_tabs.addTab(self._create_logbook_tab(), "Logbook")
         root_tabs.addTab(self._create_aliases_tab(), "Aliases")
         root_tabs.addTab(self._create_statistics_tab(), "Statistics")
@@ -744,9 +655,18 @@ class DSDApp(QMainWindow):
         controls_and_stats_layout.addStretch()
         bottom_area.addWidget(controls_and_stats_widget)
 
-        self.terminal_output_dash = QPlainTextEdit()
-        self.terminal_output_dash.setReadOnly(True)
-        bottom_area.addWidget(self.terminal_output_dash)
+        self.terminal_outputs_dash = [QPlainTextEdit(), QPlainTextEdit()]
+        self.dashboard_dash_groups = []
+        self.dashboard_terminal_splitter = QSplitter(Qt.Horizontal)
+        for i, term in enumerate(self.terminal_outputs_dash, start=1):
+            term.setReadOnly(True)
+            group = QGroupBox(f"Dashboard {i}")
+            v = QVBoxLayout(group)
+            v.addWidget(term)
+            self.dashboard_terminal_splitter.addWidget(group)
+            self.dashboard_dash_groups.append(group)
+        self.dashboard_dash_groups[1].setVisible(False)
+        bottom_area.addWidget(self.dashboard_terminal_splitter)
 
         top_bottom_splitter.addWidget(bottom_area)
 
@@ -757,6 +677,7 @@ class DSDApp(QMainWindow):
         top_bottom_splitter.setSizes([600, 300])
         visuals_splitter.setSizes([800, 500])
         bottom_area.setSizes([500, 800])
+        self.dashboard_terminal_splitter.setSizes([800, 0])
 
         self.spec_data = np.full((SPEC_WIDTH, CHUNK_SAMPLES // 2), MIN_DB, dtype=np.float32)
 
@@ -787,15 +708,12 @@ class DSDApp(QMainWindow):
             self.colormap_combo = QComboBox(); self.colormap_combo.addItems(self.colormaps.keys()); self.colormap_combo.currentTextChanged.connect(lambda name: self.imv.setColorMap(self.colormaps[name]))
             main_layout.addWidget(QLabel("Spectrogram:"), 5, 0); main_layout.addWidget(self.colormap_combo, 5, 1, 1, 2)
 
-            self.stt_enabled_check_dash = QCheckBox("Enable Transcription (STT)"); self._add_widget('stt_enabled_check_dash', self.stt_enabled_check_dash)
-            main_layout.addWidget(self.stt_enabled_check_dash, 6, 0)
-
             self.recorder_enabled_check_dash = QCheckBox("Enable Rec."); self.recorder_enabled_check_dash.toggled.connect(lambda state: self.recorder_enabled_check.setChecked(state)); self._add_widget('recorder_enabled_check_dash', self.recorder_enabled_check_dash)
-            main_layout.addWidget(self.recorder_enabled_check_dash, 7, 0)
+            main_layout.addWidget(self.recorder_enabled_check_dash, 6, 0)
 
             self.btn_start_dash = QPushButton("START"); self.btn_start_dash.clicked.connect(self.start_process)
             self.btn_stop_dash = QPushButton("STOP"); self.btn_stop_dash.setEnabled(False); self.btn_stop_dash.clicked.connect(self.stop_process)
-            main_layout.addWidget(self.btn_start_dash, 7, 1); main_layout.addWidget(self.btn_stop_dash, 7, 2)
+            main_layout.addWidget(self.btn_start_dash, 6, 1); main_layout.addWidget(self.btn_stop_dash, 6, 2)
 
         self.device_combo.currentIndexChanged.connect(self.restart_audio_stream); self.volume_slider.valueChanged.connect(self.set_volume)
         return group
@@ -887,131 +805,7 @@ class DSDApp(QMainWindow):
         except Exception as e:
             print(f"Error updating map: {e}")
 
-    def _create_stt_tab(self):
-        widget = QWidget()
-        main_layout = QHBoxLayout(widget)
 
-        settings_panel = QWidget()
-        settings_layout = QVBoxLayout(settings_panel)
-        settings_panel.setMaximumWidth(400)
-
-        engine_group = QGroupBox("STT Engine Settings")
-        engine_layout = QGridLayout(engine_group)
-
-        self.stt_engine_combo = QComboBox()
-        if WHISPER_AVAILABLE: self.stt_engine_combo.addItem("Whisper")
-        if VOSK_AVAILABLE: self.stt_engine_combo.addItem("Vosk")
-        self.stt_engine_combo.currentTextChanged.connect(self._toggle_stt_engine_options)
-
-        self.stt_lang_combo = QComboBox()
-        self.stt_lang_combo.addItems(["English", "Polish"])
-
-        engine_layout.addWidget(QLabel("Engine:"), 0, 0)
-        engine_layout.addWidget(self.stt_engine_combo, 0, 1)
-        engine_layout.addWidget(QLabel("Language:"), 1, 0)
-        engine_layout.addWidget(self.stt_lang_combo, 1, 1)
-        settings_layout.addWidget(engine_group)
-
-        self.whisper_group = QGroupBox("OpenAI-Whisper Settings")
-        whisper_layout = QGridLayout(self.whisper_group)
-        self.stt_whisper_model_combo = QComboBox()
-        self.stt_whisper_model_combo.addItems(['tiny', 'base', 'small', 'medium', 'large'])
-        self.stt_download_whisper_btn = QPushButton("Download/Verify Model")
-        self.stt_download_whisper_btn.clicked.connect(self._download_whisper_model)
-        whisper_info = QLabel('<small>Models are downloaded automatically on first use.<br><i>medium</i> and <i>large</i> models require significant RAM and disk space.</small>')
-        whisper_info.setWordWrap(True)
-
-        whisper_layout.addWidget(QLabel("Model:"), 0, 0)
-        whisper_layout.addWidget(self.stt_whisper_model_combo, 0, 1)
-        whisper_layout.addWidget(self.stt_download_whisper_btn, 1, 0, 1, 2)
-        whisper_layout.addWidget(whisper_info, 2, 0, 1, 2)
-        settings_layout.addWidget(self.whisper_group)
-
-        self.vosk_group = QGroupBox("Vosk Settings")
-        vosk_layout = QGridLayout(self.vosk_group)
-        self.stt_vosk_path_edit = QLineEdit()
-        self.stt_vosk_path_edit.setPlaceholderText("Path to the model folder")
-        self.stt_browse_vosk_btn = QPushButton("Browse...")
-        self.stt_browse_vosk_btn.clicked.connect(self._browse_for_vosk_model)
-        vosk_link = QLabel('<a href="https://alphacephei.com/vosk/models">Download Vosk models (PL/EN)</a>')
-        vosk_link.setOpenExternalLinks(True)
-
-        vosk_layout.addWidget(QLabel("Model Path:"), 0, 0)
-        vosk_layout.addWidget(self.stt_vosk_path_edit, 1, 0)
-        vosk_layout.addWidget(self.stt_browse_vosk_btn, 1, 1)
-        vosk_layout.addWidget(vosk_link, 2, 0, 1, 2)
-        settings_layout.addWidget(self.vosk_group)
-
-        history_group = QGroupBox("Transcription History")
-        history_layout = QHBoxLayout(history_group)
-        self.stt_import_btn = QPushButton("Import History")
-        self.stt_export_btn = QPushButton("Export History")
-        self.stt_import_btn.clicked.connect(self.import_stt_history)
-        self.stt_export_btn.clicked.connect(self.export_stt_history)
-        history_layout.addWidget(self.stt_import_btn)
-        history_layout.addWidget(self.stt_export_btn)
-        settings_layout.addWidget(history_group)
-
-        settings_layout.addStretch()
-
-        table_panel = QWidget()
-        table_layout = QVBoxLayout(table_panel)
-        self.stt_table = QTableWidget()
-        self.stt_table.setColumnCount(3)
-        self.stt_table.setHorizontalHeaderLabels(["Time", "Radio ID", "Transcription Text"])
-        self.stt_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.stt_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.stt_table.verticalHeader().setVisible(False)
-
-        self.stt_status_bar = QStatusBar()
-
-        table_layout.addWidget(self.stt_table)
-        table_layout.addWidget(self.stt_status_bar)
-
-        main_layout.addWidget(settings_panel)
-        main_layout.addWidget(table_panel)
-
-        self._toggle_stt_engine_options(self.stt_engine_combo.currentText())
-
-        return widget
-
-    def _toggle_stt_engine_options(self, engine_name):
-        is_whisper = (engine_name == 'Whisper')
-        is_vosk = (engine_name == 'Vosk')
-        if hasattr(self, 'whisper_group'): self.whisper_group.setVisible(is_whisper)
-        if hasattr(self, 'vosk_group'): self.vosk_group.setVisible(is_vosk)
-
-    def _browse_for_vosk_model(self):
-        path = QFileDialog.getExistingDirectory(self, "Select Vosk Model Folder")
-        if path:
-            self.stt_vosk_path_edit.setText(path)
-
-    def _download_whisper_model(self):
-        if not WHISPER_AVAILABLE:
-            QMessageBox.critical(self, "Error", "The Whisper library is not installed.")
-            return
-
-        model_name = self.stt_whisper_model_combo.currentText()
-
-        reply = QMessageBox.information(self, "Download Model",
-            f"You are about to download the Whisper model: '{model_name}'.\n"
-            f"This might take a while and consume disk space. The model will be cached for future use.\n\nContinue?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-
-        if reply == QMessageBox.Yes:
-            self.stt_status_bar.showMessage(f"Downloading Whisper model: {model_name}...")
-            QApplication.processEvents()
-
-            try:
-                # This should be in a thread for a better UX, but for now, it's a simple implementation
-                whisper.load_model(model_name)
-                self.stt_status_bar.showMessage(f"Model '{model_name}' is available locally.", 5000)
-                QMessageBox.information(self, "Success", f"Model '{model_name}' was successfully downloaded/verified.")
-            except Exception as e:
-                self.stt_status_bar.showMessage(f"Error during model download: {e}", 5000)
-                QMessageBox.critical(self, "Download Error", f"Could not download model '{model_name}':\n{e}")
-
-    #</editor-fold>
 
     #<editor-fold desc="Application Logic">
     def closeEvent(self, event):
@@ -1094,8 +888,10 @@ class DSDApp(QMainWindow):
             self.widgets["-i_m17udp"].setEnabled(text == 'm17udp')
 
         self.widgets['dual_tcp'].toggled.connect(lambda _: toggle_input_options(self.widgets['-i_type'].currentText()))
+        self.widgets['dual_tcp'].toggled.connect(self.update_dual_tcp_ui)
         input_type_combo.currentTextChanged.connect(toggle_input_options)
         toggle_input_options(input_type_combo.currentText())
+        self.update_dual_tcp_ui(False)
 
         bottom_layout = QGridLayout()
         g3 = QGroupBox("File Outputs"); l3 = QGridLayout(g3)
@@ -1206,16 +1002,51 @@ class DSDApp(QMainWindow):
         l1.addWidget(self._add_widget("-N", QCheckBox("Use NCurses Emulation [-N]")))
         l1.addWidget(self._add_widget("-Z", QCheckBox("Log Payloads to Console [-Z]")))
         g2 = QGroupBox("Encryption Keys"); l2 = QGridLayout(g2)
-        l2.addWidget(QLabel("Basic Privacy Key [-b]:"), 0, 0); l2.addWidget(self._add_widget("-b", QLineEdit()), 0, 1)
-        l2.addWidget(QLabel("RC4 Key [-1]:"), 1, 0); l2.addWidget(self._add_widget("-1", QLineEdit()), 1, 1)
-        l2.addWidget(QLabel("Hytera BP Key [-H]:"), 2, 0); l2.addWidget(self._add_widget("-H", QLineEdit()), 2, 1)
-        l2.addWidget(QLabel("dPMR/NXDN Scrambler [-R]:"), 3, 0); l2.addWidget(self._add_widget("-R", QLineEdit()), 3, 1)
-        self._add_widget("-K", QLineEdit()); self._add_widget("-k", QLineEdit())
-        l2.addWidget(QLabel("Keys from .csv (Hex) [-K]:"), 4, 0); l2.addWidget(self.widgets["-K"], 4, 1); l2.addWidget(self._create_browse_button(self.widgets["-K"]), 4, 2)
-        l2.addWidget(QLabel("Keys from .csv (Dec) [-k]:"), 5, 0); l2.addWidget(self.widgets["-k"], 5, 1); l2.addWidget(self._create_browse_button(self.widgets["-k"]), 5, 2)
+        l2.addWidget(QLabel("Basic Privacy Key [-b]:"), 0, 0)
+        l2.addWidget(self._add_widget("-b_1", QLineEdit()), 0, 1)
+        l2.addWidget(self._add_widget("-b_2", QLineEdit()), 0, 3)
+
+        l2.addWidget(QLabel("RC4 Key [-1]:"), 1, 0)
+        l2.addWidget(self._add_widget("-1_1", QLineEdit()), 1, 1)
+        l2.addWidget(self._add_widget("-1_2", QLineEdit()), 1, 3)
+
+        l2.addWidget(QLabel("Hytera BP Key [-H]:"), 2, 0)
+        l2.addWidget(self._add_widget("-H_1", QLineEdit()), 2, 1)
+        l2.addWidget(self._add_widget("-H_2", QLineEdit()), 2, 3)
+
+        l2.addWidget(QLabel("dPMR/NXDN Scrambler [-R]:"), 3, 0)
+        l2.addWidget(self._add_widget("-R_1", QLineEdit()), 3, 1)
+        l2.addWidget(self._add_widget("-R_2", QLineEdit()), 3, 3)
+
+        self._add_widget("-K_1", QLineEdit()); self._add_widget("-K_2", QLineEdit())
+        self._add_widget("-k_1", QLineEdit()); self._add_widget("-k_2", QLineEdit())
+        l2.addWidget(QLabel("Keys from .csv (Hex) [-K]:"), 4, 0)
+        browse_K1 = self._create_browse_button(self.widgets["-K_1"])
+        browse_K2 = self._create_browse_button(self.widgets["-K_2"])
+        l2.addWidget(self.widgets["-K_1"], 4, 1); l2.addWidget(browse_K1, 4, 2)
+        l2.addWidget(self.widgets["-K_2"], 4, 3); l2.addWidget(browse_K2, 4, 4)
+
+        l2.addWidget(QLabel("Keys from .csv (Dec) [-k]:"), 5, 0)
+        browse_k1 = self._create_browse_button(self.widgets["-k_1"])
+        browse_k2 = self._create_browse_button(self.widgets["-k_2"])
+        l2.addWidget(self.widgets["-k_1"], 5, 1); l2.addWidget(browse_k1, 5, 2)
+        l2.addWidget(self.widgets["-k_2"], 5, 3); l2.addWidget(browse_k2, 5, 4)
+
+        self.key_fields_port2 = [
+            self.widgets["-b_2"],
+            self.widgets["-1_2"],
+            self.widgets["-H_2"],
+            self.widgets["-R_2"],
+            self.widgets["-K_2"], browse_K2,
+            self.widgets["-k_2"], browse_k2,
+        ]
+        for w in self.key_fields_port2:
+            w.setVisible(False)
         g3 = QGroupBox("Force & Advanced Options"); l3 = QGridLayout(g3)
-        l3.addWidget(self._add_widget("-4", QCheckBox("Force BP Key")), 0, 0)
-        l3.addWidget(self._add_widget("-0", QCheckBox("Force RC4 Key")), 1, 0)
+        bp_force = QCheckBox("Force BP Key"); bp_force.setChecked(True)
+        l3.addWidget(self._add_widget("-4", bp_force), 0, 0)
+        rc4_force = QCheckBox("Force RC4 Key"); rc4_force.setChecked(True)
+        l3.addWidget(self._add_widget("-0", rc4_force), 1, 0)
         l3.addWidget(self._add_widget("-3", QCheckBox("Disable DMR Late Entry Enc.")), 2, 0)
         l3.addWidget(self._add_widget("-F", QCheckBox("Relax CRC Checksum")), 3, 0)
         l3.addWidget(QLabel("P2 Params [-X]:"), 0, 1); l3.addWidget(self._add_widget("-X", QLineEdit()), 0, 2)
@@ -1380,12 +1211,42 @@ class DSDApp(QMainWindow):
 
     def _create_terminal_group(self):
         group = QGroupBox("Terminal Log"); layout = QGridLayout(group)
-        self.terminal_output_conf = QPlainTextEdit(); self.terminal_output_conf.setReadOnly(True)
+        splitter = QSplitter(Qt.Horizontal)
+        self.terminal_outputs_conf = [QPlainTextEdit(), QPlainTextEdit()]
+        self.terminal_conf_groups = []
+        for i, term in enumerate(self.terminal_outputs_conf, start=1):
+            term.setReadOnly(True)
+            group = QGroupBox(f"Port {i}")
+            v = QVBoxLayout(group)
+            v.addWidget(term)
+            splitter.addWidget(group)
+            self.terminal_conf_groups.append(group)
+        self.terminal_conf_groups[1].setVisible(False)
+        self.terminal_splitter_conf = splitter
+
         self.search_input = QLineEdit(); self.search_input.setPlaceholderText("Search in log...")
         self.search_button = QPushButton("Find Next"); self.search_button.clicked.connect(self.search_in_log)
         self.search_input.returnPressed.connect(self.search_in_log)
-        layout.addWidget(self.terminal_output_conf, 0, 0, 1, 2); layout.addWidget(self.search_input, 1, 0); layout.addWidget(self.search_button, 1, 1)
+        layout.addWidget(splitter, 0, 0, 1, 2)
+        layout.addWidget(self.search_input, 1, 0); layout.addWidget(self.search_button, 1, 1)
         return group
+
+    def update_dual_tcp_ui(self, enabled):
+        if hasattr(self, 'terminal_conf_groups'):
+            self.terminal_conf_groups[1].setVisible(enabled)
+            if enabled:
+                self.terminal_splitter_conf.setSizes([1, 1])
+            else:
+                self.terminal_splitter_conf.setSizes([1, 0])
+        if hasattr(self, 'dashboard_dash_groups'):
+            self.dashboard_dash_groups[1].setVisible(enabled)
+            if enabled:
+                self.dashboard_terminal_splitter.setSizes([1, 1])
+            else:
+                self.dashboard_terminal_splitter.setSizes([1, 0])
+        if hasattr(self, 'key_fields_port2'):
+            for w in self.key_fields_port2:
+                w.setVisible(enabled)
 
     def _add_widget(self, key, widget, properties=None):
         self.widgets[key] = widget
@@ -1443,7 +1304,7 @@ class DSDApp(QMainWindow):
             inputs.append(None)
 
         common_flags = []
-        for flag in ["-s","-g","-V","-w","-6","-c","-b","-1","-H","-K","-C","-G","-U","-d","-r","-n","-u","-L","-Q","-M","-S","-X","-D","-v","-R","-k","-7","-I","-B","-t"]:
+        for flag in ["-s","-g","-V","-w","-6","-c","-C","-G","-U","-d","-r","-n","-u","-L","-Q","-M","-S","-X","-D","-v","-7","-I","-B","-t"]:
             widget = self.widgets.get(flag)
             if widget and hasattr(widget, 'text') and widget.text():
                 common_flags.extend([flag, widget.text()])
@@ -1457,6 +1318,17 @@ class DSDApp(QMainWindow):
         for btn, flag in self.inverse_widgets.items():
             if flag and btn.isChecked():
                 common_flags.append(flag)
+
+        per_port_flags = [[], []]
+        for flag in ["-b", "-1", "-H", "-R", "-K", "-k"]:
+            w1 = self.widgets.get(f"{flag}_1")
+            w2 = self.widgets.get(f"{flag}_2")
+            if w1 and hasattr(w1, 'text') and w1.text():
+                per_port_flags[0].extend([flag, w1.text()])
+            if dual:
+                val2 = w2.text() if (w2 and hasattr(w2, 'text') and w2.text()) else (w1.text() if w1 and hasattr(w1, 'text') else '')
+                if val2:
+                    per_port_flags[1].extend([flag, val2])
 
         commands = []
         for idx, tcp_addr in enumerate(inputs):
@@ -1501,6 +1373,8 @@ class DSDApp(QMainWindow):
                 cmd.extend(["-i", in_type])
 
             cmd.extend(common_flags)
+            if idx < len(per_port_flags):
+                cmd.extend(per_port_flags[idx])
             commands.append(list(filter(None, (str(item).strip() for item in cmd))))
 
         self.cmd_preview.setText("\n".join(subprocess.list2cmdline(c) for c in commands))
@@ -1515,9 +1389,6 @@ class DSDApp(QMainWindow):
         self.is_in_transmission = False
         self.last_logged_id = None
         self.transmission_log.clear()
-        if hasattr(self, 'stt_table'):
-            self.stt_table.setRowCount(0)
-        self.stt_active_id_row.clear()
 
         commands = self.build_command()
         if not commands:
@@ -1531,15 +1402,23 @@ class DSDApp(QMainWindow):
 
         self.restart_audio_stream()
         self.start_udp_listeners()
-        log_start_msg = "\n".join(f"$ {subprocess.list2cmdline(cmd)}" for cmd in commands) + "\n\n"
-        for term in [self.terminal_output_conf, self.terminal_output_dash]:
-            term.clear()
-            term.appendPlainText(log_start_msg)
+        for idx, cmd in enumerate(commands):
+            log_start_msg = f"$ {subprocess.list2cmdline(cmd)}\n\n"
+            if idx < len(self.terminal_outputs_conf):
+                self.terminal_outputs_conf[idx].clear()
+                self.terminal_outputs_conf[idx].appendPlainText(log_start_msg)
+            if idx < len(self.terminal_outputs_dash):
+                self.terminal_outputs_dash[idx].clear()
+                self.terminal_outputs_dash[idx].appendPlainText(log_start_msg)
+        for idx in range(len(commands), len(self.terminal_outputs_conf)):
+            self.terminal_outputs_conf[idx].clear()
+            if idx < len(self.terminal_outputs_dash):
+                self.terminal_outputs_dash[idx].clear()
         try:
             si = subprocess.STARTUPINFO()
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             si.wShowWindow = subprocess.SW_HIDE
-            for cmd in commands:
+            for idx, cmd in enumerate(commands):
                 process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
@@ -1553,7 +1432,7 @@ class DSDApp(QMainWindow):
                 )
                 self.processes.append(process)
                 thread = QThread()
-                worker = ProcessReader(process)
+                worker = ProcessReader(process, idx)
                 worker.moveToThread(thread)
                 worker.line_read.connect(self.update_terminal_log)
                 thread.started.connect(worker.run)
@@ -1565,8 +1444,10 @@ class DSDApp(QMainWindow):
 
         except Exception as e:
             error_msg = f"\nERROR: Failed to start process: {e}"
-            self.terminal_output_conf.appendPlainText(error_msg)
-            self.terminal_output_dash.appendPlainText(error_msg)
+            for term in self.terminal_outputs_conf:
+                term.appendPlainText(error_msg)
+            for term in self.terminal_outputs_dash:
+                term.appendPlainText(error_msg)
             self.set_ui_running_state(False)
 
     def stop_process(self):
@@ -1579,10 +1460,12 @@ class DSDApp(QMainWindow):
             self.output_stream = None
 
         if self.processes:
-            self.set_ui_running_state(False)  # Update UI immediately
+            self.set_ui_running_state(False)
             stop_msg = "\n--- SENDING STOP SIGNAL ---\n"
-            self.terminal_output_conf.appendPlainText(stop_msg)
-            self.terminal_output_dash.appendPlainText(stop_msg)
+            for term in self.terminal_outputs_conf:
+                term.appendPlainText(stop_msg)
+            for term in self.terminal_outputs_dash:
+                term.appendPlainText(stop_msg)
             for p in self.processes:
                 if p and p.poll() is None:
                     p.terminate()
@@ -1601,9 +1484,10 @@ class DSDApp(QMainWindow):
         self.reader_threads.clear()
 
         ready_msg = "\n--- READY ---\n"
-        if hasattr(self, 'terminal_output_conf'):
-            self.terminal_output_conf.appendPlainText(ready_msg)
-            self.terminal_output_dash.appendPlainText(ready_msg)
+        for term in self.terminal_outputs_conf:
+            term.appendPlainText(ready_msg)
+        for term in self.terminal_outputs_dash:
+            term.appendPlainText(ready_msg)
 
 
     def set_ui_running_state(self, is_running):
@@ -1613,12 +1497,18 @@ class DSDApp(QMainWindow):
         self.btn_stop_dash.setEnabled(is_running)
 
 
-    def update_terminal_log(self, text):
+    def update_terminal_log(self, idx, text):
         try:
             self.parse_and_display_log(text)
-            for term in [self.terminal_output_conf, self.terminal_output_dash]: term.moveCursor(QTextCursor.End); term.insertPlainText(text)
+            targets = []
+            if idx < len(self.terminal_outputs_conf):
+                targets.append(self.terminal_outputs_conf[idx])
+            if idx < len(self.terminal_outputs_dash):
+                targets.append(self.terminal_outputs_dash[idx])
+            for term in targets:
+                term.moveCursor(QTextCursor.End)
+                term.insertPlainText(text)
         except RuntimeError as e:
-            # This can happen if a widget is deleted while a signal is still in the queue
             print(f"RuntimeError in update_terminal_log: {e}")
 
     def parse_and_display_log(self, text):
@@ -1681,31 +1571,10 @@ class DSDApp(QMainWindow):
 
         self.transmission_log[id_val] = {'start_time': start_time, 'tg': tg_val, 'id_alias': id_alias}
 
-        if hasattr(self, 'stt_enabled_check_dash') and self.stt_enabled_check_dash.isChecked():
-            self.stt_audio_buffer[id_val] = bytearray()
-            if id_val not in self.stt_active_id_row:
-                row_pos = self.stt_table.rowCount()
-                self.stt_table.insertRow(row_pos)
-                self.stt_table.setItem(row_pos, 0, QTableWidgetItem(start_time.strftime("%H:%M:%S")))
-                id_display = self.aliases['id'].get(id_val, id_val)
-                self.stt_table.setItem(row_pos, 1, QTableWidgetItem(id_display))
-                self.stt_table.setItem(row_pos, 2, QTableWidgetItem("..."))
-                self.stt_active_id_row[id_val] = row_pos
-                self.stt_table.scrollToBottom()
-
 
     def end_all_transmissions(self, end_current=True):
         end_time = datetime.now()
         end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
-
-        if hasattr(self, 'stt_enabled_check_dash') and self.stt_enabled_check_dash.isChecked() and self.stt_audio_buffer:
-             for radio_id, audio_buffer in self.stt_audio_buffer.items():
-                if len(audio_buffer) > AUDIO_RATE * 1: # Transcribe only if there's enough audio (e.g., > 0.5s)
-                    audio_data = np.frombuffer(audio_buffer, dtype=AUDIO_DTYPE)
-                    self.start_transcription(audio_data, radio_id)
-        if end_current:
-            self.stt_audio_buffer.clear()
-            self.stt_active_id_row.clear()
 
         for log_data in self.transmission_log.values():
             duration = end_time - log_data['start_time']; duration_str = str(duration).split('.')[0]
@@ -1759,9 +1628,6 @@ class DSDApp(QMainWindow):
         except KeyError as e:
             print(f"Filter widget not ready, skipping filtering. Error: {e}")
             filtered_samples = audio_samples
-
-        if self.is_in_transmission and self.last_logged_id and self.last_logged_id in self.stt_audio_buffer:
-            self.stt_audio_buffer[self.last_logged_id].extend(filtered_samples.tobytes())
 
         # buffer per channel
         self.channel_buffers[channel] = np.concatenate(
@@ -1820,9 +1686,10 @@ class DSDApp(QMainWindow):
             self.imv.setImage(np.rot90(self.spec_data), autoLevels=False, levels=(MIN_DB, MAX_DB))
 
     def search_in_log(self):
-        if self.terminal_output_conf.find(self.search_input.text()): return
-        cursor = self.terminal_output_conf.textCursor(); cursor.movePosition(QTextCursor.Start); self.terminal_output_conf.setTextCursor(cursor)
-        if not self.terminal_output_conf.find(self.search_input.text()): QMessageBox.information(self, "Search", f"Phrase '{self.search_input.text()}' not found.")
+        term = self.terminal_outputs_conf[0]
+        if term.find(self.search_input.text()): return
+        cursor = term.textCursor(); cursor.movePosition(QTextCursor.Start); term.setTextCursor(cursor)
+        if not term.find(self.search_input.text()): QMessageBox.information(self, "Search", f"Phrase '{self.search_input.text()}' not found.")
 
     def filter_logbook(self):
         search_text = self.logbook_search_input.text().lower()
@@ -2112,37 +1979,6 @@ class DSDApp(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Save Error", f"Could not save CSV file:\n{e}")
 
-    def export_stt_history(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export Transcription History", "", "CSV Files (*.csv)");
-        if path:
-            try:
-                with open(path, 'w', newline='', encoding='utf-8') as f:
-                    writer = csv.writer(f)
-                    writer.writerow(["Time", "Radio ID", "Transcription Text"])
-                    for row in range(self.stt_table.rowCount()):
-                        row_data = [self.stt_table.item(row, col).text() if self.stt_table.item(row, col) else "" for col in range(self.stt_table.columnCount())]
-                        writer.writerow(row_data)
-                QMessageBox.information(self, "Success", f"Transcription history has been saved.")
-            except Exception as e:
-                QMessageBox.critical(self, "Save Error", f"Could not save CSV file:\n{e}")
-
-    def import_stt_history(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Import Transcription History", "", "CSV Files (*.csv)");
-        if path:
-            try:
-                with open(path, 'r', newline='', encoding='utf-8') as f:
-                    reader = csv.reader(f)
-                    self.stt_table.setRowCount(0)
-                    header = next(reader, None)
-                    for row_data in reader:
-                        row = self.stt_table.rowCount()
-                        self.stt_table.insertRow(row)
-                        for i, data in enumerate(row_data):
-                            self.stt_table.setItem(row, i, QTableWidgetItem(data))
-                QMessageBox.information(self, "Success", "Transcription history has been imported.")
-            except Exception as e:
-                QMessageBox.critical(self, "Import Error", f"Could not import CSV file:\n{e}")
-
     def add_alert(self):
         alert_type = "TG" if self.alert_type_combo.currentText() == "Talkgroup (TG)" else "ID"; value = self.alert_value_edit.text().strip(); sound = self.alert_sound_edit.text().strip() or "Default"
         if not value: QMessageBox.warning(self, "Input Error", "Value cannot be empty."); return
@@ -2199,48 +2035,6 @@ class DSDApp(QMainWindow):
             print(f"Error opening audio stream: {e}")
 
     def set_volume(self, value): self.volume = value / 100.0
-
-    def start_transcription(self, audio_data, radio_id):
-        if self.transcription_thread and self.transcription_thread.isRunning():
-            print("Transcription already in progress, skipping...")
-            return
-
-        stt_settings = {
-            'engine': self.stt_engine_combo.currentText(),
-            'language': self.stt_lang_combo.currentText(),
-            'whisper_model': self.stt_whisper_model_combo.currentText(),
-            'vosk_model_path': self.stt_vosk_path_edit.text()
-        }
-
-        self.transcription_thread = QThread()
-        self.transcription_worker = TranscriptionWorker(audio_data, radio_id, stt_settings)
-        self.transcription_worker.moveToThread(self.transcription_thread)
-
-        self.transcription_thread.started.connect(self.transcription_worker.run)
-        self.transcription_worker.finished.connect(self.update_stt_table)
-        self.transcription_worker.finished.connect(self.transcription_thread.quit)
-        self.transcription_worker.finished.connect(self.transcription_worker.deleteLater)
-        self.transcription_thread.finished.connect(self.transcription_thread.deleteLater)
-
-        if hasattr(self, 'stt_status_bar'):
-             self.transcription_worker.progress.connect(self.stt_status_bar.showMessage)
-
-        self.transcription_thread.start()
-
-    @pyqtSlot(str, str)
-    def update_stt_table(self, radio_id, text):
-        if radio_id in self.stt_active_id_row:
-            row = self.stt_active_id_row[radio_id]
-            current_item = self.stt_table.item(row, 2)
-            if current_item: # Check if item exists
-                current_text = current_item.text()
-                if current_text == "...":
-                    current_item.setText(text)
-                else:
-                    current_item.setText(f"{current_text} {text}")
-        if hasattr(self, 'stt_status_bar'):
-            self.stt_status_bar.clearMessage()
-
 
     def apply_filters(self, samples):
         samples_float = samples.astype(np.float32)
@@ -2335,3 +2129,4 @@ if __name__ == '__main__':
         sys.exit(app.exec_())
     else:
         sys.exit(0)
+
