@@ -92,7 +92,7 @@ UDP_IP = "127.0.0.1"; UDP_PORT = 23456
 CHUNK_SAMPLES = 1024; SPEC_WIDTH = 400
 MIN_DB = -70; MAX_DB = 50
 AUDIO_RATE = 16000; AUDIO_DTYPE = np.int16
-WAV_CHANNELS = 1; WAV_SAMPWIDTH = 2
+WAV_CHANNELS = 2; WAV_SAMPWIDTH = 2
 
 class IntegerAxis(AxisItem):
     def tickStrings(self, values, scale, spacing):
@@ -297,35 +297,43 @@ class AudioProcessingWindow(QDialog):
         self.main_app.widgets['nr_strength_slider'].setValue(50)
 
 class ProcessReader(QObject):
-    line_read = pyqtSignal(str)
+    line_read = pyqtSignal(int, str)
     finished = pyqtSignal()
 
-    def __init__(self, process):
+    def __init__(self, process, index):
         super().__init__()
         self.process = process
+        self.index = index
 
     @pyqtSlot()
     def run(self):
         if self.process and self.process.stdout:
             for line in iter(self.process.stdout.readline, ''):
-                self.line_read.emit(line)
-        # When the loop finishes (process terminates), emit the finished signal
+                self.line_read.emit(self.index, line)
         self.finished.emit()
 
 class UdpListener(QObject):
-    data_ready = pyqtSignal(bytes)
-    def __init__(self, ip, port): super().__init__(); self.ip, self.port, self.running = ip, port, True
+    data_ready = pyqtSignal(int, bytes)
+
+    def __init__(self, ip, port, channel):
+        super().__init__()
+        self.ip, self.port, self.channel = ip, port, channel
+        self.running = True
+
     @pyqtSlot()
     def run(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            sock.bind((self.ip, self.port)); sock.settimeout(1)
+            sock.bind((self.ip, self.port))
+            sock.settimeout(1)
         except OSError as e:
-            self.data_ready.emit(f"ERROR: Port {self.port} is already in use. {e}".encode()); return
+            self.data_ready.emit(self.channel, f"ERROR: Port {self.port} is already in use. {e}".encode())
+            return
         while self.running:
             try:
                 data, addr = sock.recvfrom(CHUNK_SAMPLES * 2)
-                if data: self.data_ready.emit(data)
+                if data:
+                    self.data_ready.emit(self.channel, data)
             except socket.timeout:
                 continue
         sock.close()
@@ -339,8 +347,11 @@ class NumericTableWidgetItem(QTableWidgetItem):
 class DSDApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.process = None; self.reader_thread = None; self.reader_worker = None
-        self.udp_listener_thread = None; self.udp_listener = None
+        self.processes = []
+        self.reader_threads = []
+        self.reader_workers = []
+        self.udp_listener_threads = []
+        self.udp_listeners = []
         self.is_in_transmission = False; self.alerts = []; self.recording_dir = ""
         self.is_recording = False; self.wav_file = None; self.is_resetting = False
         self.transmission_log = {}; self.last_logged_id = None
@@ -733,9 +744,18 @@ class DSDApp(QMainWindow):
         controls_and_stats_layout.addStretch()
         bottom_area.addWidget(controls_and_stats_widget)
 
-        self.terminal_output_dash = QPlainTextEdit()
-        self.terminal_output_dash.setReadOnly(True)
-        bottom_area.addWidget(self.terminal_output_dash)
+        self.terminal_outputs_dash = [QPlainTextEdit(), QPlainTextEdit()]
+        self.dashboard_dash_groups = []
+        self.dashboard_terminal_splitter = QSplitter(Qt.Horizontal)
+        for i, term in enumerate(self.terminal_outputs_dash, start=1):
+            term.setReadOnly(True)
+            group = QGroupBox(f"Dashboard {i}")
+            v = QVBoxLayout(group)
+            v.addWidget(term)
+            self.dashboard_terminal_splitter.addWidget(group)
+            self.dashboard_dash_groups.append(group)
+        self.dashboard_dash_groups[1].setVisible(False)
+        bottom_area.addWidget(self.dashboard_terminal_splitter)
 
         top_bottom_splitter.addWidget(bottom_area)
 
@@ -746,6 +766,7 @@ class DSDApp(QMainWindow):
         top_bottom_splitter.setSizes([600, 300])
         visuals_splitter.setSizes([800, 500])
         bottom_area.setSizes([500, 800])
+        self.dashboard_terminal_splitter.setSizes([800, 0])
 
         self.spec_data = np.full((SPEC_WIDTH, CHUNK_SAMPLES // 2), MIN_DB, dtype=np.float32)
 
@@ -1025,13 +1046,18 @@ class DSDApp(QMainWindow):
         input_type_combo.setCurrentText("tcp")
 
         self._add_widget("-i_tcp", QLineEdit("127.0.0.1:7355"))
+        self._add_widget("-i_tcp2", QLineEdit("127.0.0.1:7356"))
         self._add_widget("-i_wav", QLineEdit())
         self._add_widget("-i_m17udp", QLineEdit("127.0.0.1:17000"))
+        self._add_widget("dual_tcp", QCheckBox("Dual TCP"))
 
         l1.addWidget(QLabel("Type:"), 0, 0); l1.addWidget(self.widgets["-i_type"], 0, 1)
         l1.addWidget(QLabel("TCP Addr:Port:"), 1, 0); l1.addWidget(self.widgets["-i_tcp"], 1, 1)
-        l1.addWidget(QLabel("WAV File:"), 2, 0); l1.addWidget(self.widgets["-i_wav"], 2, 1); l1.addWidget(self._create_browse_button(self.widgets["-i_wav"]), 2, 2)
-        l1.addWidget(QLabel("M17 UDP Addr:Port:"), 3, 0); l1.addWidget(self.widgets["-i_m17udp"], 3, 1)
+        self.i_tcp2_label = QLabel("TCP2 Addr:Port:")
+        l1.addWidget(self.i_tcp2_label, 2, 0); l1.addWidget(self.widgets["-i_tcp2"], 2, 1)
+        l1.addWidget(self.widgets["dual_tcp"], 3, 0, 1, 2)
+        l1.addWidget(QLabel("WAV File:"), 4, 0); l1.addWidget(self.widgets["-i_wav"], 4, 1); l1.addWidget(self._create_browse_button(self.widgets["-i_wav"]), 4, 2)
+        l1.addWidget(QLabel("M17 UDP Addr:Port:"), 5, 0); l1.addWidget(self.widgets["-i_m17udp"], 5, 1)
         layout.addWidget(g1)
 
         self.audio_input_group = QGroupBox("Audio Input Options")
@@ -1064,14 +1090,24 @@ class DSDApp(QMainWindow):
         def toggle_input_options(text):
             is_rtl = (text == 'rtl')
             is_audio = (text == 'audio')
+            is_tcp = (text == 'tcp')
             self.rtl_group.setVisible(is_rtl)
             self.audio_input_group.setVisible(is_audio)
-            self.widgets['-i_tcp'].setEnabled(text == 'tcp')
+            self.widgets['-i_tcp'].setEnabled(is_tcp)
+            self.widgets['dual_tcp'].setVisible(is_tcp)
+            self.widgets['dual_tcp'].setEnabled(is_tcp)
+            dual = is_tcp and self.widgets['dual_tcp'].isChecked()
+            self.widgets['-i_tcp2'].setVisible(dual)
+            self.widgets['-i_tcp2'].setEnabled(dual)
+            self.i_tcp2_label.setVisible(dual)
             self.widgets["-i_wav"].setEnabled(text == 'wav')
             self.widgets["-i_m17udp"].setEnabled(text == 'm17udp')
 
+        self.widgets['dual_tcp'].toggled.connect(lambda _: toggle_input_options(self.widgets['-i_type'].currentText()))
+        self.widgets['dual_tcp'].toggled.connect(self.update_dual_tcp_ui)
         input_type_combo.currentTextChanged.connect(toggle_input_options)
         toggle_input_options(input_type_combo.currentText())
+        self.update_dual_tcp_ui(False)
 
         bottom_layout = QGridLayout()
         g3 = QGroupBox("File Outputs"); l3 = QGridLayout(g3)
@@ -1182,13 +1218,46 @@ class DSDApp(QMainWindow):
         l1.addWidget(self._add_widget("-N", QCheckBox("Use NCurses Emulation [-N]")))
         l1.addWidget(self._add_widget("-Z", QCheckBox("Log Payloads to Console [-Z]")))
         g2 = QGroupBox("Encryption Keys"); l2 = QGridLayout(g2)
-        l2.addWidget(QLabel("Basic Privacy Key [-b]:"), 0, 0); l2.addWidget(self._add_widget("-b", QLineEdit()), 0, 1)
-        l2.addWidget(QLabel("RC4 Key [-1]:"), 1, 0); l2.addWidget(self._add_widget("-1", QLineEdit()), 1, 1)
-        l2.addWidget(QLabel("Hytera BP Key [-H]:"), 2, 0); l2.addWidget(self._add_widget("-H", QLineEdit()), 2, 1)
-        l2.addWidget(QLabel("dPMR/NXDN Scrambler [-R]:"), 3, 0); l2.addWidget(self._add_widget("-R", QLineEdit()), 3, 1)
-        self._add_widget("-K", QLineEdit()); self._add_widget("-k", QLineEdit())
-        l2.addWidget(QLabel("Keys from .csv (Hex) [-K]:"), 4, 0); l2.addWidget(self.widgets["-K"], 4, 1); l2.addWidget(self._create_browse_button(self.widgets["-K"]), 4, 2)
-        l2.addWidget(QLabel("Keys from .csv (Dec) [-k]:"), 5, 0); l2.addWidget(self.widgets["-k"], 5, 1); l2.addWidget(self._create_browse_button(self.widgets["-k"]), 5, 2)
+        l2.addWidget(QLabel("Basic Privacy Key [-b]:"), 0, 0)
+        l2.addWidget(self._add_widget("-b_1", QLineEdit()), 0, 1)
+        l2.addWidget(self._add_widget("-b_2", QLineEdit()), 0, 3)
+
+        l2.addWidget(QLabel("RC4 Key [-1]:"), 1, 0)
+        l2.addWidget(self._add_widget("-1_1", QLineEdit()), 1, 1)
+        l2.addWidget(self._add_widget("-1_2", QLineEdit()), 1, 3)
+
+        l2.addWidget(QLabel("Hytera BP Key [-H]:"), 2, 0)
+        l2.addWidget(self._add_widget("-H_1", QLineEdit()), 2, 1)
+        l2.addWidget(self._add_widget("-H_2", QLineEdit()), 2, 3)
+
+        l2.addWidget(QLabel("dPMR/NXDN Scrambler [-R]:"), 3, 0)
+        l2.addWidget(self._add_widget("-R_1", QLineEdit()), 3, 1)
+        l2.addWidget(self._add_widget("-R_2", QLineEdit()), 3, 3)
+
+        self._add_widget("-K_1", QLineEdit()); self._add_widget("-K_2", QLineEdit())
+        self._add_widget("-k_1", QLineEdit()); self._add_widget("-k_2", QLineEdit())
+        l2.addWidget(QLabel("Keys from .csv (Hex) [-K]:"), 4, 0)
+        browse_K1 = self._create_browse_button(self.widgets["-K_1"])
+        browse_K2 = self._create_browse_button(self.widgets["-K_2"])
+        l2.addWidget(self.widgets["-K_1"], 4, 1); l2.addWidget(browse_K1, 4, 2)
+        l2.addWidget(self.widgets["-K_2"], 4, 3); l2.addWidget(browse_K2, 4, 4)
+
+        l2.addWidget(QLabel("Keys from .csv (Dec) [-k]:"), 5, 0)
+        browse_k1 = self._create_browse_button(self.widgets["-k_1"])
+        browse_k2 = self._create_browse_button(self.widgets["-k_2"])
+        l2.addWidget(self.widgets["-k_1"], 5, 1); l2.addWidget(browse_k1, 5, 2)
+        l2.addWidget(self.widgets["-k_2"], 5, 3); l2.addWidget(browse_k2, 5, 4)
+
+        self.key_fields_port2 = [
+            self.widgets["-b_2"],
+            self.widgets["-1_2"],
+            self.widgets["-H_2"],
+            self.widgets["-R_2"],
+            self.widgets["-K_2"], browse_K2,
+            self.widgets["-k_2"], browse_k2,
+        ]
+        for w in self.key_fields_port2:
+            w.setVisible(False)
         g3 = QGroupBox("Force & Advanced Options"); l3 = QGridLayout(g3)
         l3.addWidget(self._add_widget("-4", QCheckBox("Force BP Key")), 0, 0)
         l3.addWidget(self._add_widget("-0", QCheckBox("Force RC4 Key")), 1, 0)
@@ -1356,12 +1425,42 @@ class DSDApp(QMainWindow):
 
     def _create_terminal_group(self):
         group = QGroupBox("Terminal Log"); layout = QGridLayout(group)
-        self.terminal_output_conf = QPlainTextEdit(); self.terminal_output_conf.setReadOnly(True)
+        splitter = QSplitter(Qt.Horizontal)
+        self.terminal_outputs_conf = [QPlainTextEdit(), QPlainTextEdit()]
+        self.terminal_conf_groups = []
+        for i, term in enumerate(self.terminal_outputs_conf, start=1):
+            term.setReadOnly(True)
+            group = QGroupBox(f"Port {i}")
+            v = QVBoxLayout(group)
+            v.addWidget(term)
+            splitter.addWidget(group)
+            self.terminal_conf_groups.append(group)
+        self.terminal_conf_groups[1].setVisible(False)
+        self.terminal_splitter_conf = splitter
+
         self.search_input = QLineEdit(); self.search_input.setPlaceholderText("Search in log...")
         self.search_button = QPushButton("Find Next"); self.search_button.clicked.connect(self.search_in_log)
         self.search_input.returnPressed.connect(self.search_in_log)
-        layout.addWidget(self.terminal_output_conf, 0, 0, 1, 2); layout.addWidget(self.search_input, 1, 0); layout.addWidget(self.search_button, 1, 1)
+        layout.addWidget(splitter, 0, 0, 1, 2)
+        layout.addWidget(self.search_input, 1, 0); layout.addWidget(self.search_button, 1, 1)
         return group
+
+    def update_dual_tcp_ui(self, enabled):
+        if hasattr(self, 'terminal_conf_groups'):
+            self.terminal_conf_groups[1].setVisible(enabled)
+            if enabled:
+                self.terminal_splitter_conf.setSizes([1, 1])
+            else:
+                self.terminal_splitter_conf.setSizes([1, 0])
+        if hasattr(self, 'dashboard_dash_groups'):
+            self.dashboard_dash_groups[1].setVisible(enabled)
+            if enabled:
+                self.dashboard_terminal_splitter.setSizes([1, 1])
+            else:
+                self.dashboard_terminal_splitter.setSizes([1, 0])
+        if hasattr(self, 'key_fields_port2'):
+            for w in self.key_fields_port2:
+                w.setVisible(enabled)
 
     def _add_widget(self, key, widget, properties=None):
         self.widgets[key] = widget
@@ -1380,54 +1479,123 @@ class DSDApp(QMainWindow):
         path = QFileDialog.getExistingDirectory(self, "Select Directory") if is_dir else QFileDialog.getOpenFileName(self, "Select File")[0]
         if path: line_edit_widget.setText(path)
 
-    def start_udp_listener(self): self.udp_listener_thread = QThread(); self.udp_listener = UdpListener(UDP_IP, UDP_PORT); self.udp_listener.moveToThread(self.udp_listener_thread); self.udp_listener_thread.started.connect(self.udp_listener.run); self.udp_listener.data_ready.connect(self.process_audio_data); self.udp_listener_thread.start()
+    def start_udp_listeners(self):
+        ports = [UDP_PORT]
+        if (self.widgets.get('dual_tcp') and self.widgets['dual_tcp'].isChecked() and
+                self.widgets.get('-i_type') and self.widgets['-i_type'].currentText() == 'tcp'):
+            ports.append(UDP_PORT + 1)
+        for idx, port in enumerate(ports, start=1):
+            thread = QThread()
+            listener = UdpListener(UDP_IP, port, idx)
+            listener.moveToThread(thread)
+            thread.started.connect(listener.run)
+            listener.data_ready.connect(self.process_audio_data)
+            thread.start()
+            self.udp_listener_threads.append(thread)
+            self.udp_listeners.append(listener)
 
-    def stop_udp_listener(self):
-        if self.udp_listener: self.udp_listener.running = False
-        if self.udp_listener_thread: self.udp_listener_thread.quit(); self.udp_listener_thread.wait()
+    def stop_udp_listeners(self):
+        for listener in self.udp_listeners:
+            listener.running = False
+        for thread in self.udp_listener_threads:
+            thread.quit(); thread.wait()
+        self.udp_listeners.clear(); self.udp_listener_threads.clear()
 
     def build_command(self):
-        if not self.dsd_fme_path: self.cmd_preview.setText("ERROR: DSD-FME path not set!"); return []
-        command = [self.dsd_fme_path, "-o", f"udp:{UDP_IP}:{UDP_PORT}"]
+        if not self.dsd_fme_path:
+            self.cmd_preview.setText("ERROR: DSD-FME path not set!")
+            return []
+
         in_type = self.widgets["-i_type"].currentText()
+        dual = self.widgets.get('dual_tcp') and self.widgets['dual_tcp'].isChecked() and in_type == 'tcp'
 
-        if in_type == "tcp": command.extend(["-i", f"tcp:{self.widgets['-i_tcp'].text()}" if self.widgets['-i_tcp'].text() else "tcp"])
-        elif in_type == "wav": self.widgets['-i_wav'].text() and command.extend(["-i", self.widgets['-i_wav'].text()])
-        elif in_type == "m17udp": command.extend(["-i", f"m17udp:{self.widgets['-i_m17udp'].text()}" if self.widgets['-i_m17udp'].text() else "m17udp"])
-        elif in_type == "audio":
-            dev_index = self.widgets["audio_in_dev"].currentData()
-            if dev_index is not None: command.extend(["-i", f"pa:{dev_index}"])
-            else: QMessageBox.critical(self, "Error", "No audio input device selected."); return []
-        elif in_type == "rtl":
-            dev_index = self.widgets["rtl_dev"].currentData()
-            if dev_index is None: QMessageBox.critical(self, "Error", "No RTL-SDR device selected or found."); return []
-            try:
-                dev = str(dev_index)
-                freq_val = float(self.widgets["rtl_freq"].text()); unit = self.widgets["rtl_unit"].currentText(); gain = self.widgets["rtl_gain"].text(); ppm = self.widgets["rtl_ppm"].text()
-                bw = self.widgets["rtl_bw"].currentText(); sq = self.widgets["rtl_sq"].text(); vol = self.widgets["rtl_vol"].text()
-                freq_map = {"MHz": "M", "KHz": "K", "GHz": "G"}; freq_str = f"{freq_val}{freq_map.get(unit, '')}"
-                rtl_params = [dev, freq_str, gain, ppm, bw, sq, vol]
-                command.extend(["-i", f"rtl:{':'.join(p for p in rtl_params if p)}"])
-            except ValueError: QMessageBox.critical(self, "Error", "Invalid frequency value."); return []
-        else: command.extend(["-i", in_type])
+        inputs = []
+        if in_type == 'tcp':
+            inputs.append(self.widgets['-i_tcp'].text())
+            if dual:
+                inputs.append(self.widgets['-i_tcp2'].text())
+        else:
+            inputs.append(None)
 
-        for flag in ["-s","-g","-V","-w","-6","-c","-b","-1","-H","-K","-C","-G","-U","-d","-r","-n","-u","-L","-Q","-M","-S","-X","-D","-v","-R","-k","-7","-I","-B","-t"]:
+        common_flags = []
+        for flag in ["-s","-g","-V","-w","-6","-c","-C","-G","-U","-d","-r","-n","-u","-L","-Q","-M","-S","-X","-D","-v","-7","-I","-B","-t"]:
             widget = self.widgets.get(flag)
             if widget and hasattr(widget, 'text') and widget.text():
-                 command.extend([flag, widget.text()])
+                common_flags.extend([flag, widget.text()])
             elif widget and isinstance(widget, QCheckBox) and widget.isChecked():
-                 command.append(flag)
+                common_flags.append(flag)
 
         for flag in ["-l","-xx","-xr","-xd","-xz","-N","-Z","-4","-0","-3","-F","-T","-Y","-p","-E","-e","-q","-z","-y","-8","-P","-a","-W"]:
-            if self.widgets.get(flag) and self.widgets[flag].isChecked(): command.append(flag)
+            if self.widgets.get(flag) and self.widgets[flag].isChecked():
+                common_flags.append(flag)
 
         for btn, flag in self.inverse_widgets.items():
-            if flag and btn.isChecked(): command.append(flag)
+            if flag and btn.isChecked():
+                common_flags.append(flag)
 
-        final_command = list(filter(None, (str(item).strip() for item in command))); self.cmd_preview.setText(subprocess.list2cmdline(final_command)); return final_command
+        per_port_flags = [[], []]
+        for flag in ["-b", "-1", "-H", "-R", "-K", "-k"]:
+            w1 = self.widgets.get(f"{flag}_1")
+            w2 = self.widgets.get(f"{flag}_2")
+            if w1 and hasattr(w1, 'text') and w1.text():
+                per_port_flags[0].extend([flag, w1.text()])
+            if dual:
+                val2 = w2.text() if (w2 and hasattr(w2, 'text') and w2.text()) else (w1.text() if w1 and hasattr(w1, 'text') else '')
+                if val2:
+                    per_port_flags[1].extend([flag, val2])
+
+        commands = []
+        for idx, tcp_addr in enumerate(inputs):
+            cmd = [self.dsd_fme_path, "-o", f"udp:{UDP_IP}:{UDP_PORT + idx}"]
+            if in_type == 'tcp':
+                cmd.extend(["-i", f"tcp:{tcp_addr}" if tcp_addr else "tcp"])
+            elif in_type == 'wav':
+                if self.widgets['-i_wav'].text():
+                    cmd.extend(["-i", self.widgets['-i_wav'].text()])
+            elif in_type == 'm17udp':
+                addr = self.widgets['-i_m17udp'].text()
+                cmd.extend(["-i", f"m17udp:{addr}" if addr else "m17udp"])
+            elif in_type == 'audio':
+                dev_index = self.widgets["audio_in_dev"].currentData()
+                if dev_index is not None:
+                    cmd.extend(["-i", f"pa:{dev_index}"])
+                else:
+                    QMessageBox.critical(self, "Error", "No audio input device selected.")
+                    return []
+            elif in_type == 'rtl':
+                dev_index = self.widgets["rtl_dev"].currentData()
+                if dev_index is None:
+                    QMessageBox.critical(self, "Error", "No RTL-SDR device selected or found.")
+                    return []
+                try:
+                    dev = str(dev_index)
+                    freq_val = float(self.widgets["rtl_freq"].text())
+                    unit = self.widgets["rtl_unit"].currentText()
+                    gain = self.widgets["rtl_gain"].text()
+                    ppm = self.widgets["rtl_ppm"].text()
+                    bw = self.widgets["rtl_bw"].currentText()
+                    sq = self.widgets["rtl_sq"].text()
+                    vol = self.widgets["rtl_vol"].text()
+                    freq_map = {"MHz": "M", "KHz": "K", "GHz": "G"}
+                    freq_str = f"{freq_val}{freq_map.get(unit, '')}"
+                    rtl_params = [dev, freq_str, gain, ppm, bw, sq, vol]
+                    cmd.extend(["-i", f"rtl:{':'.join(p for p in rtl_params if p)}"])
+                except ValueError:
+                    QMessageBox.critical(self, "Error", "Invalid frequency value.")
+                    return []
+            else:
+                cmd.extend(["-i", in_type])
+
+            cmd.extend(common_flags)
+            if idx < len(per_port_flags):
+                cmd.extend(per_port_flags[idx])
+            commands.append(list(filter(None, (str(item).strip() for item in cmd))))
+
+        self.cmd_preview.setText("\n".join(subprocess.list2cmdline(c) for c in commands))
+        return commands
 
     def start_process(self):
-        if self.process:
+        if self.processes:
             return
         self.create_initial_map()
         self.logbook_table.setRowCount(0)
@@ -1439,8 +1607,8 @@ class DSDApp(QMainWindow):
             self.stt_table.setRowCount(0)
         self.stt_active_id_row.clear()
 
-        command = self.build_command()
-        if not command:
+        commands = self.build_command()
+        if not commands:
             return
 
         lrrp_file_path = self.widgets["-L"].text()
@@ -1449,82 +1617,94 @@ class DSDApp(QMainWindow):
                 self.lrrp_watcher.removePaths(self.lrrp_watcher.files())
             self.lrrp_watcher.addPath(lrrp_file_path)
 
-        self.start_udp_listener()
         self.restart_audio_stream()
-        log_start_msg = f"$ {subprocess.list2cmdline(command)}\n\n"
-        for term in [self.terminal_output_conf, self.terminal_output_dash]:
-            term.clear()
-            term.appendPlainText(log_start_msg)
+        self.start_udp_listeners()
+        for idx, cmd in enumerate(commands):
+            log_start_msg = f"$ {subprocess.list2cmdline(cmd)}\n\n"
+            if idx < len(self.terminal_outputs_conf):
+                self.terminal_outputs_conf[idx].clear()
+                self.terminal_outputs_conf[idx].appendPlainText(log_start_msg)
+            if idx < len(self.terminal_outputs_dash):
+                self.terminal_outputs_dash[idx].clear()
+                self.terminal_outputs_dash[idx].appendPlainText(log_start_msg)
+        for idx in range(len(commands), len(self.terminal_outputs_conf)):
+            self.terminal_outputs_conf[idx].clear()
+            if idx < len(self.terminal_outputs_dash):
+                self.terminal_outputs_dash[idx].clear()
         try:
             si = subprocess.STARTUPINFO()
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             si.wShowWindow = subprocess.SW_HIDE
-            self.process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-                universal_newlines=True,
-                encoding='utf-8',
-                errors='ignore',
-                startupinfo=si,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
-            )
-
-            self.reader_thread = QThread()
-            self.reader_worker = ProcessReader(self.process)
-            self.reader_worker.moveToThread(self.reader_thread)
-
-            self.reader_worker.line_read.connect(self.update_terminal_log)
-            self.reader_thread.started.connect(self.reader_worker.run)
-            self.reader_worker.finished.connect(self._on_reader_finished) # Connect to the new robust handler
-
-            self.reader_thread.start()
+            for idx, cmd in enumerate(commands):
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    universal_newlines=True,
+                    encoding='utf-8',
+                    errors='ignore',
+                    startupinfo=si,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+                )
+                self.processes.append(process)
+                thread = QThread()
+                worker = ProcessReader(process, idx)
+                worker.moveToThread(thread)
+                worker.line_read.connect(self.update_terminal_log)
+                thread.started.connect(worker.run)
+                worker.finished.connect(self._on_reader_finished)
+                thread.start()
+                self.reader_threads.append(thread)
+                self.reader_workers.append(worker)
             self.set_ui_running_state(True)
 
         except Exception as e:
             error_msg = f"\nERROR: Failed to start process: {e}"
-            self.terminal_output_conf.appendPlainText(error_msg)
-            self.terminal_output_dash.appendPlainText(error_msg)
+            for term in self.terminal_outputs_conf:
+                term.appendPlainText(error_msg)
+            for term in self.terminal_outputs_dash:
+                term.appendPlainText(error_msg)
             self.set_ui_running_state(False)
 
     def stop_process(self):
         if self.is_recording:
             self.stop_internal_recording()
-        self.stop_udp_listener()
+        self.stop_udp_listeners()
         if self.output_stream:
             self.output_stream.stop()
             self.output_stream.close()
             self.output_stream = None
 
-        if self.process and self.process.poll() is None:
-            self.set_ui_running_state(False) # Update UI immediately
+        if self.processes:
+            self.set_ui_running_state(False)
             stop_msg = "\n--- SENDING STOP SIGNAL ---\n"
-            self.terminal_output_conf.appendPlainText(stop_msg)
-            self.terminal_output_dash.appendPlainText(stop_msg)
-            self.process.terminate()
-            # The _on_reader_finished will be called automatically when the process exits.
+            for term in self.terminal_outputs_conf:
+                term.appendPlainText(stop_msg)
+            for term in self.terminal_outputs_dash:
+                term.appendPlainText(stop_msg)
+            for p in self.processes:
+                if p and p.poll() is None:
+                    p.terminate()
 
     @pyqtSlot()
     def _on_reader_finished(self):
-        """This is the single authoritative cleanup handler."""
-        # This function is now guaranteed to be called after the reader loop ends.
+        if any(p.poll() is None for p in self.processes):
+            return
         self.end_all_transmissions()
         self.set_ui_running_state(False)
-
-        if self.reader_thread:
-            self.reader_thread.quit()
-            self.reader_thread.wait() # Wait for the event loop to finish
-
-        # Now it's safe to clear the references
-        self.process = None
-        self.reader_worker = None
-        self.reader_thread = None
+        for thread in self.reader_threads:
+            thread.quit()
+            thread.wait()
+        self.processes.clear()
+        self.reader_workers.clear()
+        self.reader_threads.clear()
 
         ready_msg = "\n--- READY ---\n"
-        if hasattr(self, 'terminal_output_conf'):
-            self.terminal_output_conf.appendPlainText(ready_msg)
-            self.terminal_output_dash.appendPlainText(ready_msg)
+        for term in self.terminal_outputs_conf:
+            term.appendPlainText(ready_msg)
+        for term in self.terminal_outputs_dash:
+            term.appendPlainText(ready_msg)
 
 
     def set_ui_running_state(self, is_running):
@@ -1534,12 +1714,18 @@ class DSDApp(QMainWindow):
         self.btn_stop_dash.setEnabled(is_running)
 
 
-    def update_terminal_log(self, text):
+    def update_terminal_log(self, idx, text):
         try:
             self.parse_and_display_log(text)
-            for term in [self.terminal_output_conf, self.terminal_output_dash]: term.moveCursor(QTextCursor.End); term.insertPlainText(text)
+            targets = []
+            if idx < len(self.terminal_outputs_conf):
+                targets.append(self.terminal_outputs_conf[idx])
+            if idx < len(self.terminal_outputs_dash):
+                targets.append(self.terminal_outputs_dash[idx])
+            for term in targets:
+                term.moveCursor(QTextCursor.End)
+                term.insertPlainText(text)
         except RuntimeError as e:
-            # This can happen if a widget is deleted while a signal is still in the queue
             print(f"RuntimeError in update_terminal_log: {e}")
 
     def parse_and_display_log(self, text):
@@ -1664,7 +1850,7 @@ class DSDApp(QMainWindow):
         self.wav_file = None; self.is_recording = False
         for panel in [self.live_labels_conf, self.live_labels_dash]: panel and (panel['recording'].setText("INACTIVE"), panel['recording'].setStyleSheet("color: gray;"))
 
-    def process_audio_data(self, raw_data):
+    def process_audio_data(self, channel, raw_data):
         if raw_data.startswith(b"ERROR:"):
             QMessageBox.critical(self, "UDP Error", raw_data.decode())
             self.close()
@@ -1675,32 +1861,47 @@ class DSDApp(QMainWindow):
             return
         audio_samples = np.frombuffer(raw_data[:clean_num_bytes], dtype=AUDIO_DTYPE)
 
-        # Apply filters first
         try:
             filtered_samples = self.apply_filters(audio_samples.copy())
         except KeyError as e:
-            # This can happen if widgets are not fully initialized yet
             print(f"Filter widget not ready, skipping filtering. Error: {e}")
             filtered_samples = audio_samples
 
-        # Add filtered audio to STT buffer
         if self.is_in_transmission and self.last_logged_id and self.last_logged_id in self.stt_audio_buffer:
             self.stt_audio_buffer[self.last_logged_id].extend(filtered_samples.tobytes())
 
-        # Write filtered audio for recording
+        # buffer per channel
+        self.channel_buffers[channel] = np.concatenate(
+            (self.channel_buffers[channel], filtered_samples)
+        )
+
+        frames = []
+        n = min(len(self.channel_buffers[1]), len(self.channel_buffers[2]))
+        if n > 0:
+            left = self.channel_buffers[1][:n]
+            right = self.channel_buffers[2][:n]
+            self.channel_buffers[1] = self.channel_buffers[1][n:]
+            self.channel_buffers[2] = self.channel_buffers[2][n:]
+            frames.append(np.column_stack((left, right)))
+
+        for ch in (1, 2):
+            other = 2 if ch == 1 else 1
+            if len(self.channel_buffers[ch]) > 0 and len(self.channel_buffers[other]) == 0:
+                data = self.channel_buffers[ch]
+                self.channel_buffers[ch] = np.array([], dtype=AUDIO_DTYPE)
+                frames.append(np.column_stack((data, data)))
+
         if self.is_recording and self.wav_file:
-            self.wav_file.writeframes(filtered_samples.tobytes())
+            for frame in frames:
+                self.wav_file.writeframes(frame.astype(AUDIO_DTYPE).tobytes())
 
-        # Play filtered audio
         if not self.mute_check.isChecked() and self.output_stream:
-            try:
-                output_data = (filtered_samples * self.volume).astype(AUDIO_DTYPE)
-                self.output_stream.write(output_data)
-            except Exception:
-                # This can fail if the stream is closed, which is fine
-                pass
+            for frame in frames:
+                try:
+                    self.output_stream.write((frame * self.volume).astype(AUDIO_DTYPE))
+                except Exception:
+                    pass
 
-        # Use RAW (unfiltered) audio for visuals (scope, spectrogram)
         if hasattr(self, 'scope_curve'):
             self.scope_curve.setData(audio_samples)
 
@@ -1726,9 +1927,10 @@ class DSDApp(QMainWindow):
             self.imv.setImage(np.rot90(self.spec_data), autoLevels=False, levels=(MIN_DB, MAX_DB))
 
     def search_in_log(self):
-        if self.terminal_output_conf.find(self.search_input.text()): return
-        cursor = self.terminal_output_conf.textCursor(); cursor.movePosition(QTextCursor.Start); self.terminal_output_conf.setTextCursor(cursor)
-        if not self.terminal_output_conf.find(self.search_input.text()): QMessageBox.information(self, "Search", f"Phrase '{self.search_input.text()}' not found.")
+        term = self.terminal_outputs_conf[0]
+        if term.find(self.search_input.text()): return
+        cursor = term.textCursor(); cursor.movePosition(QTextCursor.Start); term.setTextCursor(cursor)
+        if not term.find(self.search_input.text()): QMessageBox.information(self, "Search", f"Phrase '{self.search_input.text()}' not found.")
 
     def filter_logbook(self):
         search_text = self.logbook_search_input.text().lower()
@@ -2093,11 +2295,16 @@ class DSDApp(QMainWindow):
         except Exception as e: print(f"Could not query audio devices: {e}")
 
     def restart_audio_stream(self):
-        if self.output_stream: self.output_stream.stop(); self.output_stream.close()
+        if self.output_stream:
+            self.output_stream.stop()
+            self.output_stream.close()
         self.filter_states.clear()
+        self.channel_buffers = {1: np.array([], dtype=AUDIO_DTYPE), 2: np.array([], dtype=AUDIO_DTYPE)}
         try:
-            self.output_stream = sd.OutputStream(samplerate=AUDIO_RATE, device=self.device_combo.currentData(), channels=1, dtype=AUDIO_DTYPE, blocksize=CHUNK_SAMPLES); self.output_stream.start()
-        except Exception as e: print(f"Error opening audio stream: {e}")
+            self.output_stream = sd.OutputStream(samplerate=AUDIO_RATE, device=self.device_combo.currentData(), channels=2, dtype=AUDIO_DTYPE, blocksize=CHUNK_SAMPLES)
+            self.output_stream.start()
+        except Exception as e:
+            print(f"Error opening audio stream: {e}")
 
     def set_volume(self, value): self.volume = value / 100.0
 
