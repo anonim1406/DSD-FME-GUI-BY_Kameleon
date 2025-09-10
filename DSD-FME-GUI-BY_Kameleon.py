@@ -961,6 +961,12 @@ class DSDApp(QMainWindow):
                 <meta charset=\"utf-8\" />
                 <style>
                     html, body, #map {{ height: 100%; margin: 0; }}
+codex/fix-keyerror-for-map_layout-n9olz3
+
+codex/fix-keyerror-for-map_layout-kwrc9z
+codex/fix-keyerror-for-map_layout-6zslwz
+main
+main
                 </style>
                 <link rel=\"stylesheet\" href=\"{leaflet_css}\" />
                 <script>
@@ -976,15 +982,56 @@ class DSDApp(QMainWindow):
                             markers.clearLayers();
                             data.forEach(d => L.marker(d, {{draggable:true}}).addTo(markers));
                         }};
+codex/fix-keyerror-for-map_layout-n9olz3
                     }}
                 </script>
                 <script src=\"{leaflet_js}\"></script>
                 <script>
                     document.addEventListener('DOMContentLoaded', __initMap);
                 </script>
+
+codex/fix-keyerror-for-map_layout-kwrc9z
+                    }}
+                </script>
+                <script src=\"{leaflet_js}\"></script>
+                <script>
+                    document.addEventListener('DOMContentLoaded', __initMap);
+                </script>
+
+                    }}
+                    function __loadLeafletModule() {{
+                        import('{leaflet_js}').then(m => {{ window.L = m; __initMap(); }});
+                    }}
+                </script>
+                <script src=\"{leaflet_js}\" onload=\"__initMap()\" onerror=\"__loadLeafletModule()\"></script>
+                </style> codex/fix-keyerror-for-map_layout-jc6dli
+                <link rel=\"stylesheet\" href=\"{leaflet_css}\" />
+                <script src=\"{leaflet_js}\"></script>
+                <link rel=\"stylesheet\" href=\"assets/leaflet/leaflet.css\" />
+                <script src=\"assets/leaflet/leaflet.js\"></script>
+main
+main
+main
+main
             </head>
             <body>
             <div id='map'></div>
+            <script>
+                var map = L.map('map', {{minZoom:0, maxZoom:2}}).setView([0,0], 1);
+                var markers = L.layerGroup().addTo(map);
+                codex/fix-keyerror-for-map_layout-jc6dli
+                L.tileLayer('{tiles_url}{{z}}/{{x}}/{{y}}.png', {{noWrap:true, minZoom:0, maxZoom:2, attribution:''}}).addTo(map);
+                L.tileLayer('tiles/{{z}}/{{x}}/{{y}}.png', {{noWrap:true, minZoom:0, maxZoom:2, attribution:''}}).addTo(map);
+main
+                map.on('click', function(e) {{
+                    L.marker(e.latlng, {{draggable:true}}).addTo(markers);
+                }});
+                function getMarkers() {{ return markers.getLayers().map(m => m.getLatLng()); }}
+                function setMarkers(data) {{
+                    markers.clearLayers();
+                    data.forEach(d => L.marker(d, {{draggable:true}}).addTo(markers));
+                }}
+            </script>
             </body>
             </html>
         """
@@ -1724,9 +1771,19 @@ class DSDApp(QMainWindow):
                     freq_str = f"{freq_val}{freq_map.get(unit, '')}"
                     rtl_params = [freq_str, gain, ppm, bw, sq, vol]
                     dev_index = self.widgets["rtl_dev"].currentData()
+codex/fix-keyerror-for-map_layout-n9olz3
                     if dev_index is None:
                         dev_index = 0
                     rtl_params.insert(0, str(dev_index))
+codex/fix-keyerror-for-map_layout-kwrc9z
+                    if dev_index is None:
+                        dev_index = 0
+                    rtl_params.insert(0, str(dev_index))
+
+                    if dev_index is not None:
+                        rtl_params.insert(0, str(dev_index))
+main
+main
                     cmd.extend(["-i", f"rtl:{':'.join(p for p in rtl_params if p)}"])
                 except ValueError:
                     QMessageBox.critical(self, "Error", "Invalid frequency value.")
