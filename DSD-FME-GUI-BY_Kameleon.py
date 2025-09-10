@@ -60,7 +60,7 @@ from pyqtgraph import DateAxisItem, AxisItem
 import sounddevice as sd
 from scipy import signal
 import folium
-from folium.plugins import MousePosition
+from folium.plugins import MousePosition, Draw
 
 try:
     import winsound
@@ -77,6 +77,11 @@ except ImportError:
 CONFIG_FILE = resource_path('dsd-fme-gui-config.json')
 ALIASES_FILE = resource_path('dsd-fme-aliases.json')
 MAP_FILE = resource_path('lrrp_map.html')
+MAP3D_FILE = resource_path('lrrp_map_3d.html')
+MGRS_LIB = '<script src="https://cdn.jsdelivr.net/npm/mgrs@1.0.0/mgrs.min.js"></script>'
+THREED_HTML = """<!DOCTYPE html><html><head><title>3D Map</title>
+<style>html,body,#map{height:100%;margin:0;}</style></head>
+<body><div id='map'>3D view placeholder</div></body></html>"""
 UDP_IP = "127.0.0.1"; UDP_PORT = 23456
 CHUNK_SAMPLES = 1024; SPEC_WIDTH = 400
 MIN_DB = -70; MAX_DB = 50
@@ -340,6 +345,8 @@ class DSDApp(QMainWindow):
         self.last_logged_id = [None, None]
         self.output_stream = None; self.output_streams = {}; self.volume = 1.0
         self.current_tile = 'CartoDB dark_matter'; self.manual_markers = []
+        self.geojson_layers = []
+        self.geojson_layers = []
         self.filter_states = {}
         self.aliases = {'tg': {}, 'id': {}}
         self.current_tg = [None, None]; self.current_id = [None, None]; self.current_cc = [None, None]
@@ -906,48 +913,162 @@ class DSDApp(QMainWindow):
         controls = QHBoxLayout()
         self.map_tile_combo = QComboBox(); self.map_tile_combo.addItems(["Dark", "Satellite", "Topo"])
         self.map_tile_combo.currentTextChanged.connect(lambda _: self.create_initial_map())
-        self.coord_format_combo = QComboBox(); self.coord_format_combo.addItems(["Lat/Lon"])
+        self.map_mode_combo = QComboBox(); self.map_mode_combo.addItems(["2D", "3D"])
+        self.map_mode_combo.currentTextChanged.connect(self.update_map_mode)
+        self.coord_format_combo = QComboBox(); self.coord_format_combo.addItems(["Lat/Lon", "MGRS"])
         self.coord_format_combo.currentTextChanged.connect(lambda _: self.create_initial_map())
-        self.add_marker_btn = QPushButton("Add Marker"); self.add_marker_btn.clicked.connect(self.add_marker_dialog)
+        self.load_map_btn = QPushButton("Load Map"); self.load_map_btn.clicked.connect(self.import_map_json)
+        self.save_map_btn = QPushButton("Save Map"); self.save_map_btn.clicked.connect(self.export_map_json)
+        self.export_png_btn = QPushButton("Export PNG"); self.export_png_btn.clicked.connect(self.export_map_png)
         controls.addWidget(QLabel("Tiles:")); controls.addWidget(self.map_tile_combo)
+        controls.addWidget(QLabel("Mode:")); controls.addWidget(self.map_mode_combo)
         controls.addWidget(QLabel("Coords:")); controls.addWidget(self.coord_format_combo)
-        controls.addWidget(self.add_marker_btn); controls.addStretch()
+        controls.addWidget(self.load_map_btn)
+        controls.addWidget(self.save_map_btn)
+        controls.addWidget(self.export_png_btn)
+        controls.addStretch()
         layout.addLayout(controls)
 
         self.map_view = QWebEngineView()
         if not os.path.exists(MAP_FILE):
             self.create_initial_map()
         self.map_view.setUrl(QUrl.fromLocalFile(os.path.abspath(MAP_FILE)))
-
         layout.addWidget(self.map_view)
         return widget
 
     def create_initial_map(self):
-        tile_map = {
-            'Dark': 'CartoDB dark_matter',
-            'Satellite': 'Esri WorldImagery',
-            'Topo': 'OpenTopoMap'
+        tile_urls = {
+            'Dark': 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+            'Satellite': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            'Topo': 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png'
         }
-        self.current_tile = tile_map.get(self.map_tile_combo.currentText(), 'CartoDB dark_matter') if hasattr(self, 'map_tile_combo') else self.current_tile
-        map_obj = folium.Map(location=[52.237, 21.017], zoom_start=6, tiles=self.current_tile)
-        MousePosition(position='topright', separator=' , ', numDigits=5).add_to(map_obj)
-        for m in getattr(self, 'manual_markers', []):
-            folium.Marker(location=[m['lat'], m['lon']], tooltip=m.get('label', 'Marker')).add_to(map_obj)
-        map_obj.save(MAP_FILE)
-        if hasattr(self, 'map_view'):
+        tile_url = tile_urls.get(self.map_tile_combo.currentText(), tile_urls['Dark']) if hasattr(self, 'map_tile_combo') else tile_urls['Dark']
+        initial_markers = json.dumps(getattr(self, 'initial_markers', []))
+        mgrs_grid = 'true' if self.coord_format_combo.currentText() == 'MGRS' else 'false'
+        html = f"""
+<!DOCTYPE html><html><head>
+<meta charset='utf-8'/>
+<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>
+<link rel='stylesheet' href='https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css'/>
+<link rel='stylesheet' href='https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css'/>
+<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
+<script src='https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js'></script>
+<script src='https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js'></script>
+<script src='https://cdn.jsdelivr.net/npm/mgrs@1.0.0/mgrs.min.js'></script>
+<script src='https://unpkg.com/leaflet-mgrs@1.0.0/Leaflet.MGRS.min.js'></script>
+<style>
+html,body,#map{{height:100%;margin:0;}}
+#map{{width:80%;float:left;}}
+#palette{{width:20%;float:right;height:100%;overflow:auto;border-left:1px solid #888;padding:4px;background:#f0f0f0;}}
+.symbol{{width:32px;height:32px;margin:4px;cursor:grab;}}
+</style>
+</head>
+<body>
+<div id='map'></div>
+<div id='palette'>
+ <input id='searchBox' placeholder='Place or MGRS' style='width:120px'/>
+ <button onclick='doSearch()'>Go</button>
+ <hr/>
+ <input type='file' id='loadInput' style='display:none'/>
+ <button onclick="document.getElementById('loadInput').click()">Load</button>
+ <button onclick='saveSymbols()'>Save</button>
+ <hr/>
+ <div id='icons'>
+  <img src='https://upload.wikimedia.org/wikipedia/commons/thumb/3/3f/US_Army_symbol_INF.svg/32px-US_Army_symbol_INF.svg.png' class='symbol' draggable='true' data-icon='https://upload.wikimedia.org/wikipedia/commons/thumb/3/3f/US_Army_symbol_INF.svg/32px-US_Army_symbol_INF.svg.png'/>
+  <img src='https://upload.wikimedia.org/wikipedia/commons/thumb/4/40/US_Army_symbol_AR.svg/32px-US_Army_symbol_AR.svg.png' class='symbol' draggable='true' data-icon='https://upload.wikimedia.org/wikipedia/commons/thumb/4/40/US_Army_symbol_AR.svg/32px-US_Army_symbol_AR.svg.png'/>
+ </div>
+</div>
+<script>
+var map = L.map('map').setView([52.237,21.017],6);
+L.tileLayer('{tile_url}',{{maxZoom:18}}).addTo(map);
+if({mgrs_grid}){{ L.MGRS.grid().addTo(map); }}
+var geocoder = L.Control.Geocoder.nominatim();
+var markers = [];
+function addMarker(latlng,iconUrl,note){{
+  var icon = L.icon({{iconUrl:iconUrl,iconSize:[32,32]}});
+  var m = L.marker(latlng,{{icon:icon,draggable:false}}).addTo(map);
+  if(note) m.bindPopup(note);
+  markers.push({{lat:latlng.lat,lon:latlng.lng,icon:iconUrl,note:note}});
+}}
+function setMarkers(list){{
+  markers=[]; map.eachLayer(function(layer){{ if(layer instanceof L.Marker) map.removeLayer(layer); }});
+  list.forEach(function(m){{ addMarker([m.lat,m.lon],m.icon,m.note); }});
+}}
+function getMarkers(){{ return markers; }}
+document.querySelectorAll('.symbol').forEach(function(el){{
+  el.addEventListener('dragstart',function(e){{ e.dataTransfer.setData('icon',e.target.dataset.icon); }});
+}});
+map.getContainer().addEventListener('dragover',function(e){{ e.preventDefault(); }});
+map.getContainer().addEventListener('drop',function(e){{
+  e.preventDefault();
+  var icon = e.dataTransfer.getData('icon');
+  var latlng = map.mouseEventToLatLng(e);
+  var note = prompt('Note:','');
+  addMarker(latlng,icon,note);
+}});
+function saveSymbols(){{
+  var data = JSON.stringify(markers);
+  var blob = new Blob([data],{{type:'application/json'}});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download='map.json'; a.click();
+}}
+document.getElementById('loadInput').addEventListener('change',function(evt){{
+  var file = evt.target.files[0]; if(!file)return; var reader = new FileReader();
+  reader.onload=function(e){{ var data=JSON.parse(e.target.result); setMarkers(data); }}; reader.readAsText(file);
+}});
+function doSearch(){{
+  var q = document.getElementById('searchBox').value;
+  try{{ var p = mgrs.toPoint(q); map.setView([p[1],p[0]],14); }}catch(err){{
+    geocoder.geocode(q, function(res){{ if(res.length>0) map.setView(res[0].center,14); }});
+  }}
+}}
+setMarkers({initial_markers});
+</script>
+</body></html>
+"""
+        with open(MAP_FILE, 'w', encoding='utf-8') as f:
+            f.write(html)
+        if hasattr(self, 'map_view') and self.map_mode_combo.currentText() == '2D':
             self.map_view.setUrl(QUrl.fromLocalFile(os.path.abspath(MAP_FILE)))
             self.map_view.reload()
 
-    def add_marker_dialog(self):
-        text, ok = QInputDialog.getText(self, "Add Marker", "Enter lat,lon,label:")
-        if ok and text:
-            parts = text.split(',')
-            try:
-                lat = float(parts[0]); lon = float(parts[1]); label = parts[2] if len(parts) > 2 else 'Marker'
-                self.manual_markers.append({'lat': lat, 'lon': lon, 'label': label})
-                self.create_initial_map()
-            except Exception:
-                QMessageBox.warning(self, "Input Error", "Invalid coordinates")
+    def export_map_png(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Export Map to PNG", "", "PNG Files (*.png)")
+        if path:
+            pix = self.map_view.grab()
+            pix.save(path, 'PNG')
+
+    def export_map_json(self):
+        def _save_callback(data):
+            path, _ = QFileDialog.getSaveFileName(self, "Save Map", "", "JSON Files (*.json)")
+            if path:
+                try:
+                    with open(path, 'w') as f:
+                        f.write(data)
+                except Exception as e:
+                    QMessageBox.warning(self, "Export Error", f"Failed to export: {e}")
+        self.map_view.page().runJavaScript("JSON.stringify(getMarkers());", _save_callback)
+
+    def import_map_json(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Load Map", "", "JSON Files (*.json)")
+        if not path:
+            return
+        try:
+            with open(path, 'r') as f:
+                data = f.read()
+            js = f"setMarkers(JSON.parse({json.dumps(data)}));"
+            self.map_view.page().runJavaScript(js)
+        except Exception as e:
+            QMessageBox.warning(self, "Import Error", f"Failed to import: {e}")
+
+    def update_map_mode(self):
+        if self.map_mode_combo.currentText() == "3D":
+            if not os.path.exists(MAP3D_FILE):
+                with open(MAP3D_FILE, 'w') as f:
+                    f.write(THREED_HTML)
+            self.map_view.setUrl(QUrl.fromLocalFile(os.path.abspath(MAP3D_FILE)))
+        else:
+            self.create_initial_map()
 
     def update_map_from_lrrp(self, path):
         print(f"LRRP file changed: {path}")
