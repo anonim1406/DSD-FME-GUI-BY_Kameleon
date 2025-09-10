@@ -344,8 +344,15 @@ class DSDApp(QMainWindow):
         self.transmission_log = {}
         self.last_logged_id = [None, None]
         self.output_stream = None; self.output_streams = {}; self.volume = 1.0
+# audio device selectors are created later; define placeholders so
+# early audio initialisation does not crash if they are accessed
+        self.device_combo1 = None
+        self.device_combo2 = None
+        # audio device selectors are created later; define placeholders so
+        # early audio initialisation does not crash if they are accessed
+        self.device_combo1 = None
+        self.device_combo2 = None
         self.current_tile = 'CartoDB dark_matter'; self.manual_markers = []
-        self.geojson_layers = []
         self.geojson_layers = []
         self.filter_states = {}
         self.aliases = {'tg': {}, 'id': {}}
@@ -955,10 +962,12 @@ class DSDApp(QMainWindow):
 <script src='https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js'></script>
 <script src='https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js'></script>
 <script src='https://cdn.jsdelivr.net/npm/mgrs@1.0.0/mgrs.min.js'></script>
-<script src='https://unpkg.com/leaflet-mgrs@1.0.0/Leaflet.MGRS.min.js'></script>
+<script src='https://cdn.jsdelivr.net/npm/leaflet-mgrs@2.0.0/dist/leaflet-mgrs.min.js'></script>
+<script src='https://unpkg.com/leaflet-mouse-position@1.0.0/src/L.Control.MousePosition.js'></script>
+<script src='https://unpkg.com/milsymbol@2.1.0/dist/milsymbol.js'></script>
 <style>
 html,body,#map{{height:100%;margin:0;}}
-#map{{width:80%;float:left;}}
+#map{{width:80%;float:left;cursor:crosshair;}}
 #palette{{width:20%;float:right;height:100%;overflow:auto;border-left:1px solid #888;padding:4px;background:#f0f0f0;}}
 .symbol{{width:32px;height:32px;margin:4px;cursor:grab;}}
 </style>
@@ -973,16 +982,15 @@ html,body,#map{{height:100%;margin:0;}}
  <button onclick="document.getElementById('loadInput').click()">Load</button>
  <button onclick='saveSymbols()'>Save</button>
  <hr/>
- <div id='icons'>
-  <img src='https://upload.wikimedia.org/wikipedia/commons/thumb/3/3f/US_Army_symbol_INF.svg/32px-US_Army_symbol_INF.svg.png' class='symbol' draggable='true' data-icon='https://upload.wikimedia.org/wikipedia/commons/thumb/3/3f/US_Army_symbol_INF.svg/32px-US_Army_symbol_INF.svg.png'/>
-  <img src='https://upload.wikimedia.org/wikipedia/commons/thumb/4/40/US_Army_symbol_AR.svg/32px-US_Army_symbol_AR.svg.png' class='symbol' draggable='true' data-icon='https://upload.wikimedia.org/wikipedia/commons/thumb/4/40/US_Army_symbol_AR.svg/32px-US_Army_symbol_AR.svg.png'/>
- </div>
+ <div id='icons'></div>
 </div>
 <script>
+var coordFormat = { 'true':'MGRS','false':'Lat/Lon' }[{mgrs_grid}];
 var map = L.map('map').setView([52.237,21.017],6);
 L.tileLayer('{tile_url}',{{maxZoom:18}}).addTo(map);
-if({mgrs_grid}){{ L.MGRS.grid().addTo(map); }}
+if({mgrs_grid}){{ L.grids.mgrs().addTo(map); }}
 var geocoder = L.Control.Geocoder.nominatim();
+L.control.mousePosition({{position:'bottomleft',formatter:function(ll){{return coordFormat=='MGRS'?mgrs.forward([ll.lng,ll.lat]):ll.lat.toFixed(5)+', '+ll.lng.toFixed(5);}}}}).addTo(map);
 var markers = [];
 function addMarker(latlng,iconUrl,note){{
   var icon = L.icon({{iconUrl:iconUrl,iconSize:[32,32]}});
@@ -995,16 +1003,38 @@ function setMarkers(list){{
   list.forEach(function(m){{ addMarker([m.lat,m.lon],m.icon,m.note); }});
 }}
 function getMarkers(){{ return markers; }}
-document.querySelectorAll('.symbol').forEach(function(el){{
-  el.addEventListener('dragstart',function(e){{ e.dataTransfer.setData('icon',e.target.dataset.icon); }});
-}});
+function buildPalette(){{
+  var sidcs=['SFGPUCI----K---','SHGPUCI----K---'];
+  var container=document.getElementById('icons');
+  sidcs.forEach(function(code){{
+    var sym=new ms.Symbol(code,{{size:32}});
+    var img=document.createElement('img');
+    img.src=sym.toDataURL();
+    img.className='symbol';
+    img.draggable=true;
+    img.dataset.sidc=code;
+    container.appendChild(img);
+    img.addEventListener('dragstart',function(e){{e.dataTransfer.setData('sidc',code);}});
+  }});
+}}
+buildPalette();
 map.getContainer().addEventListener('dragover',function(e){{ e.preventDefault(); }});
 map.getContainer().addEventListener('drop',function(e){{
   e.preventDefault();
-  var icon = e.dataTransfer.getData('icon');
+  var code = e.dataTransfer.getData('sidc');
+  if(!code) return;
   var latlng = map.mouseEventToLatLng(e);
+  var sym=new ms.Symbol(code,{{size:32}});
   var note = prompt('Note:','');
-  addMarker(latlng,icon,note);
+  addMarker(latlng,sym.toDataURL(),note);
+}});
+map.on('contextmenu',function(e){{
+  var coord = coordFormat=='MGRS'?mgrs.forward([e.latlng.lng,e.latlng.lat]):e.latlng.lat.toFixed(5)+', '+e.latlng.lng.toFixed(5);
+  if(confirm('Location: '+coord+'\nAdd pin here?')){{
+     var sym=new ms.Symbol('SFGPUCI----K---',{{size:32}});
+     var note = prompt('Note:','');
+     addMarker(e.latlng,sym.toDataURL(),note);
+  }}
 }});
 function saveSymbols(){{
   var data = JSON.stringify(markers);
@@ -2082,6 +2112,10 @@ setMarkers({initial_markers});
             if (not mute or not mute.isChecked()) and channel in self.output_streams:
                 try:
                     self.output_streams[channel].write((data * self.volume).astype(AUDIO_DTYPE))
+# audio device selectors are created later; define placeholders so
+# early audio initialisation does not crash if they are accessed
+        self.device_combo1 = None
+        self.device_combo2 = None
                 except Exception:
                     pass
         else:
@@ -2533,6 +2567,9 @@ setMarkers({initial_markers});
         self.channel_buffers = {1: np.array([], dtype=AUDIO_DTYPE), 2: np.array([], dtype=AUDIO_DTYPE)}
 
         dual = self.widgets.get('dual_tcp') and self.widgets['dual_tcp'].isChecked()
+        if self.device_combo1 is None:
+            print("Audio devices not initialized")
+            return
         try:
             if dual:
                 for ch, combo in ((1, self.device_combo1), (2, self.device_combo2)):
