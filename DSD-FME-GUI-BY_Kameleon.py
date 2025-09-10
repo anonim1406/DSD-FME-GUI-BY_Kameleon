@@ -671,7 +671,8 @@ class DSDApp(QMainWindow):
         root_tabs.addTab(self._create_aliases_tab(), "Aliases")
         root_tabs.addTab(self._create_statistics_tab(), "Statistics")
         root_tabs.addTab(self._create_recorder_tab(), "Recorder")
-        root_tabs.addTab(self._create_map_tab(), "Map")
+        map_index = root_tabs.addTab(QWidget(), "Map")
+        root_tabs.setTabEnabled(map_index, False)
         root_tabs.addTab(self._create_alerts_tab(), "Alerts")
         if not self.dsd_fme_path and hasattr(self, 'btn_start'): self.btn_start.setEnabled(False); self.statusBar().showMessage("DSD-FME path not set!")
 
@@ -1112,7 +1113,7 @@ class DSDApp(QMainWindow):
 
         g1 = QGroupBox("Input (-i)"); l1 = QGridLayout(g1)
         input_type_combo = self._add_widget("-i_type", QComboBox())
-        input_type_combo.addItems(["tcp", "rtl", "audio", "wav", "pulse", "m17udp"])
+        input_type_combo.addItems(["tcp", "SDR (beta)", "audio", "wav", "pulse", "m17udp"])
         input_type_combo.setCurrentText("tcp")
 
         self._add_widget("-i_tcp", QLineEdit("127.0.0.1:7355"))
@@ -1141,26 +1142,22 @@ class DSDApp(QMainWindow):
         l_audio.addWidget(self.audio_refresh_btn, 0, 2)
         layout.addWidget(self.audio_input_group)
 
-        self.rtl_group = QGroupBox("RTL-SDR Options"); l_rtl = QGridLayout(self.rtl_group)
-        self._add_widget("rtl_dev", QComboBox())
-        self.rtl_refresh_btn = QPushButton("Refresh List"); self.rtl_refresh_btn.clicked.connect(self._populate_rtl_devices)
-        self._add_widget("rtl_freq", QLineEdit("433.175")); self._add_widget("rtl_unit", QComboBox()); self.widgets["rtl_unit"].addItems(["MHz", "KHz", "GHz", "Hz"])
+        self.rtl_group = QGroupBox("SDR (beta) Options"); l_rtl = QGridLayout(self.rtl_group)
+        self._add_widget("rtl_freq", QLineEdit("433.175"))
+        self._add_widget("rtl_unit", QComboBox()); self.widgets["rtl_unit"].addItems(["MHz", "KHz", "GHz", "Hz"])
         self._add_widget("rtl_gain", QLineEdit("0")); self._add_widget("rtl_ppm", QLineEdit("0"))
         self._add_widget("rtl_bw", QComboBox()); self.widgets["rtl_bw"].addItems(["12", "4", "6", "8", "16", "24"])
         self._add_widget("rtl_sq", QLineEdit("0")); self._add_widget("rtl_vol", QLineEdit("2"))
-        self.rtl_dev_label = QLabel("Device:")
-        l_rtl.addWidget(self.rtl_dev_label, 0, 0); l_rtl.addWidget(self.widgets["rtl_dev"], 0, 1); l_rtl.addWidget(self.rtl_refresh_btn, 0, 2)
-        l_rtl.addWidget(QLabel("Frequency:"), 1, 0); l_rtl.addWidget(self.widgets["rtl_freq"], 1, 1); l_rtl.addWidget(self.widgets["rtl_unit"], 1, 2)
-        l_rtl.addWidget(QLabel("Gain (0=auto):"), 2, 0); l_rtl.addWidget(self.widgets["rtl_gain"], 2, 1); l_rtl.addWidget(QLabel("PPM Error:"), 3, 0); l_rtl.addWidget(self.widgets["rtl_ppm"], 3, 1)
-        l_rtl.addWidget(QLabel("Bandwidth (kHz):"), 4, 0); l_rtl.addWidget(self.widgets["rtl_bw"], 4, 1)
-        l_rtl.addWidget(QLabel("Squelch Level:"), 5, 0); l_rtl.addWidget(self.widgets["rtl_sq"], 5, 1)
-        l_rtl.addWidget(QLabel("Sample Volume:"), 6, 0); l_rtl.addWidget(self.widgets["rtl_vol"], 6, 1)
+        l_rtl.addWidget(QLabel("Frequency:"), 0, 0); l_rtl.addWidget(self.widgets["rtl_freq"], 0, 1); l_rtl.addWidget(self.widgets["rtl_unit"], 0, 2)
+        l_rtl.addWidget(QLabel("Gain (0=auto):"), 1, 0); l_rtl.addWidget(self.widgets["rtl_gain"], 1, 1)
+        l_rtl.addWidget(QLabel("PPM Error:"), 2, 0); l_rtl.addWidget(self.widgets["rtl_ppm"], 2, 1)
+        l_rtl.addWidget(QLabel("Bandwidth (kHz):"), 3, 0); l_rtl.addWidget(self.widgets["rtl_bw"], 3, 1)
+        l_rtl.addWidget(QLabel("Squelch Level:"), 4, 0); l_rtl.addWidget(self.widgets["rtl_sq"], 4, 1)
+        l_rtl.addWidget(QLabel("Sample Volume:"), 5, 0); l_rtl.addWidget(self.widgets["rtl_vol"], 5, 1)
         layout.addWidget(self.rtl_group)
-        # allow manual device selection when using RTL-SDR input
-        self._populate_rtl_devices()
 
         def toggle_input_options(text):
-            is_rtl = (text == 'rtl')
+            is_rtl = (text == 'SDR (beta)')
             is_audio = (text == 'audio')
             is_tcp = (text == 'tcp')
             self.rtl_group.setVisible(is_rtl)
@@ -1209,36 +1206,6 @@ class DSDApp(QMainWindow):
         l4.addWidget(self.widgets["-y"], 6, 0, 1, 2)
         l4.addWidget(self.widgets["-8"], 7, 0, 1, 2)
         bottom_layout.addWidget(g3, 0, 0); bottom_layout.addWidget(g4, 0, 1); layout.addLayout(bottom_layout); layout.addStretch(); return tab
-
-    def _populate_rtl_devices(self):
-        combo = self.widgets.get("rtl_dev")
-        if not combo:
-            return
-        combo.clear()
-        combo.setEditable(True)
-        if not RTLSDR_AVAILABLE:
-            for i in range(2):
-                combo.addItem(f"#{i}", userData=i)
-            combo.setToolTip("pyrtlsdr not installed; enter device index manually")
-            self.rtl_refresh_btn.setEnabled(False)
-            return
-        try:
-            devices = RtlSdr.get_device_serial_addresses()
-            if devices:
-                for i, serial in enumerate(devices):
-                    combo.addItem(f"#{i}: {serial}", userData=i)
-            else:
-                count = RtlSdr.get_device_count()
-                if count == 0:
-                    combo.addItem("No RTL-SDR devices found.")
-                else:
-                    for i in range(count):
-                        combo.addItem(f"#{i}", userData=i)
-        except Exception as e:
-            print(f"Error enumerating RTL-SDR devices: {e}")
-            for i in range(2):
-                combo.addItem(f"#{i}", userData=i)
-            QMessageBox.warning(self, "RTL-SDR", "Could not list devices. Enter index manually.")
 
     def _populate_audio_input_devices(self):
         combo = self.widgets.get("audio_in_dev")
@@ -1636,6 +1603,8 @@ class DSDApp(QMainWindow):
             return []
 
         in_type = self.widgets["-i_type"].currentText()
+        if in_type == "SDR (beta)":
+            in_type = "rtl"
         dual = self.widgets.get('dual_tcp') and self.widgets['dual_tcp'].isChecked() and in_type == 'tcp'
         if dual and not self.dsd_fme_path2:
             QMessageBox.warning(self, "Dual Mode Disabled", "Second DSD-FME path not set. Only Port 1 will run.")
@@ -1705,10 +1674,6 @@ class DSDApp(QMainWindow):
                     QMessageBox.critical(self, "Error", "No audio input device selected.")
                     return []
             elif in_type == 'rtl':
-                params = []
-                dev_index = self.widgets["rtl_dev"].currentData()
-                params.append(str(dev_index) if dev_index is not None else "")
-
                 freq_text = self.widgets["rtl_freq"].text().strip()
                 if freq_text:
                     try:
@@ -1718,25 +1683,20 @@ class DSDApp(QMainWindow):
                         return []
                     unit = self.widgets["rtl_unit"].currentText()
                     freq_map = {"MHz": "M", "KHz": "K", "GHz": "G", "Hz": ""}
-                    params.append(f"{freq_val}{freq_map.get(unit, '')}")
-                else:
-                    params.append("")
-
-                params.extend([
-                    self.widgets["rtl_gain"].text().strip(),
-                    self.widgets["rtl_ppm"].text().strip(),
-                    self.widgets["rtl_bw"].currentText().strip(),
-                    self.widgets["rtl_sq"].text().strip(),
-                    self.widgets["rtl_vol"].text().strip(),
-                ])
-
-                while params and params[-1] == "":
-                    params.pop()
-
-                if any(params):
+                    params = [
+                        "1",
+                        f"{freq_val}{freq_map.get(unit, '')}",
+                        self.widgets["rtl_gain"].text().strip(),
+                        self.widgets["rtl_ppm"].text().strip(),
+                        self.widgets["rtl_bw"].currentText().strip(),
+                        self.widgets["rtl_sq"].text().strip(),
+                        self.widgets["rtl_vol"].text().strip(),
+                    ]
+                    while params and params[-1] == "":
+                        params.pop()
                     cmd.extend(["-i", f"rtl:{':'.join(params)}"])
                 else:
-                    cmd.extend(["-i", "rtl"])
+                    cmd.extend(["-i", "rtl:1"])
             else:
                 cmd.extend(["-i", in_type])
 
@@ -1751,7 +1711,6 @@ class DSDApp(QMainWindow):
     def start_process(self):
         if self.processes:
             return
-        self.create_initial_map()
         self.logbook_table.setRowCount(0)
         self.mini_logbook_table.setRowCount(0)
         self.is_in_transmission = [False, False]
