@@ -961,16 +961,22 @@ class DSDApp(QMainWindow):
                 <meta charset=\"utf-8\" />
                 <style>
                     html, body, #map {{ height: 100%; margin: 0; }}
-                </style>
+                </style> codex/fix-keyerror-for-map_layout-jc6dli
                 <link rel=\"stylesheet\" href=\"{leaflet_css}\" />
                 <script src=\"{leaflet_js}\"></script>
+                <link rel=\"stylesheet\" href=\"assets/leaflet/leaflet.css\" />
+                <script src=\"assets/leaflet/leaflet.js\"></script>
+main
             </head>
             <body>
             <div id='map'></div>
             <script>
                 var map = L.map('map', {{minZoom:0, maxZoom:2}}).setView([0,0], 1);
                 var markers = L.layerGroup().addTo(map);
+                codex/fix-keyerror-for-map_layout-jc6dli
                 L.tileLayer('{tiles_url}{{z}}/{{x}}/{{y}}.png', {{noWrap:true, minZoom:0, maxZoom:2, attribution:''}}).addTo(map);
+                L.tileLayer('tiles/{{z}}/{{x}}/{{y}}.png', {{noWrap:true, minZoom:0, maxZoom:2, attribution:''}}).addTo(map);
+main
                 map.on('click', function(e) {{
                     L.marker(e.latlng, {{draggable:true}}).addTo(markers);
                 }});
