@@ -2116,8 +2116,6 @@ setMarkers({initial_markers});
 # early audio initialisation does not crash if they are accessed
         self.device_combo1 = None
         self.device_combo2 = None
-                except Exception:
-                    pass
         else:
             frames = []
             n = min(len(self.channel_buffers[1]), len(self.channel_buffers[2]))
