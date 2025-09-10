@@ -1229,6 +1229,11 @@ class DSDApp(QMainWindow):
         self.search_input.returnPressed.connect(self.search_in_log)
         layout.addWidget(splitter, 0, 0, 1, 2)
         layout.addWidget(self.search_input, 1, 0); layout.addWidget(self.search_button, 1, 1)
+
+        # Optional debug checkbox to toggle additional log output
+        self.debug_checkbox = self._add_widget('debug_check', QCheckBox("Debug"))
+        layout.addWidget(self.debug_checkbox, 2, 0, 1, 2)
+
         return outer_group
 
     def update_dual_tcp_ui(self, enabled):
@@ -1621,9 +1626,10 @@ class DSDApp(QMainWindow):
             self.close()
             return
 
-        # Temporary debug to ensure channel 2 is receiving data
-        if channel == 2:
-            print(f"Channel 2 received {len(raw_data)} bytes")
+        # Optional debug output to show how many bytes were received per channel
+        if self.widgets.get('debug_check') and self.widgets['debug_check'].isChecked():
+            self.terminal_outputs_conf[channel-1].appendPlainText(
+                f"Channel {channel} received {len(raw_data)} bytes")
 
         clean_num_bytes = (len(raw_data) // np.dtype(AUDIO_DTYPE).itemsize) * np.dtype(AUDIO_DTYPE).itemsize
         if clean_num_bytes == 0:
