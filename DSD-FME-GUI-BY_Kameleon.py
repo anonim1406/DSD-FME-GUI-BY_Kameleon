@@ -1771,19 +1771,15 @@ main
                     freq_str = f"{freq_val}{freq_map.get(unit, '')}"
                     rtl_params = [freq_str, gain, ppm, bw, sq, vol]
                     dev_index = self.widgets["rtl_dev"].currentData()
-codex/fix-keyerror-for-map_layout-n9olz3
                     if dev_index is None:
                         dev_index = 0
                     rtl_params.insert(0, str(dev_index))
-codex/fix-keyerror-for-map_layout-kwrc9z
                     if dev_index is None:
                         dev_index = 0
                     rtl_params.insert(0, str(dev_index))
 
                     if dev_index is not None:
                         rtl_params.insert(0, str(dev_index))
-main
-main
                     cmd.extend(["-i", f"rtl:{':'.join(p for p in rtl_params if p)}"])
                 except ValueError:
                     QMessageBox.critical(self, "Error", "Invalid frequency value.")
