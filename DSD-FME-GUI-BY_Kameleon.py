@@ -187,10 +187,10 @@ class AudioProcessingWindow(QDialog):
             label.setAlignment(Qt.AlignCenter)
 
             slider = QSlider(Qt.Vertical)
-            slider.setRange(-20, 20)
+            slider.setRange(-12, 12)
             slider.setValue(0)
             slider.setTickPosition(QSlider.TicksBothSides)
-            slider.setTickInterval(5)
+            slider.setTickInterval(3)
             self.main_app._add_widget(f'eq{port}_band_{i}', slider)
 
             slider_v_layout.addWidget(label)
@@ -953,44 +953,28 @@ class DSDApp(QMainWindow):
             <html>
             <head>
                 <title>Map</title>
+                <meta charset=\"utf-8\" />
                 <style>
-                    html, body, #map {{
-                        height: 100%;
-                        margin: 0;
-                    }}
+                    html, body, #map {{ height: 100%; margin: 0; }}
                 </style>
-                <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-                <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"/>
-                <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
-                <script src="https://cdn.jsdelivr.net/npm/leaflet.grid@0.3.0/leaflet-grid.js"></script>
-                <script src="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
-                <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
-                <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
-                <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
-                <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
-                {MGRS_LIB}
-                <style>
-                    .lrrp-marker {{
-                        animation: pulse 2s infinite;
-                    }}
-                    @keyframes pulse {{
-                        0% {{
-                            transform: scale(0.9);
-                            box-shadow: 0 0 0 0 rgba(204, 169, 44, 0.4);
-                        }}
-                        70% {{
-                            transform: scale(1);
-                            box-shadow: 0 0 0 10px rgba(204, 169, 44, 0);
-                        }}
-                        100% {{
-                            transform: scale(0.9);
-                            box-shadow: 0 0 0 0 rgba(204, 169, 44, 0);
-                        }}
-                    }}
-                </style>
+                <link rel=\"stylesheet\" href=\"assets/leaflet/leaflet.css\" />
+                <script src=\"assets/leaflet/leaflet.js\"></script>
             </head>
             <body>
             <div id='map'></div>
+            <script>
+                var map = L.map('map', {{minZoom:0, maxZoom:2}}).setView([0,0], 1);
+                var markers = L.layerGroup().addTo(map);
+                L.tileLayer('tiles/{{z}}/{{x}}/{{y}}.png', {{noWrap:true, minZoom:0, maxZoom:2, attribution:''}}).addTo(map);
+                map.on('click', function(e) {{
+                    L.marker(e.latlng, {{draggable:true}}).addTo(markers);
+                }});
+                function getMarkers() {{ return markers.getLayers().map(m => m.getLatLng()); }}
+                function setMarkers(data) {{
+                    markers.clearLayers();
+                    data.forEach(d => L.marker(d, {{draggable:true}}).addTo(markers));
+                }}
+            </script>
             </body>
             </html>
         """
@@ -2597,19 +2581,23 @@ class DSDApp(QMainWindow):
                 sliders = self.eq_sliders[2] if channel == 2 else []
             else:
                 sliders = self.eq_sliders.get(channel, [])
-            for i, slider in enumerate(sliders):
-                gain_db = slider.value()
-                if abs(gain_db) > 0.1:  # Apply only if there is a change
+            if any(abs(s.value()) > 0.1 for s in sliders):
+                original = samples_float.copy()
+                for i, slider in enumerate(sliders):
+                    gain_db = slider.value()
+                    if abs(gain_db) <= 0.1:
+                        continue
                     center_freq = eq_bands[i]
                     q_factor = 3.0
                     b, a = signal.iirpeak(center_freq, q_factor, fs=AUDIO_RATE)
-                    b *= 10 ** (gain_db / 20.0)
+                    gain = 10 ** (gain_db / 20.0)
 
                     filter_name = f'eq_filter_{channel}_{i}'
                     if filter_name not in self.filter_states:
                         self.filter_states[filter_name] = signal.lfilter_zi(b, a)
-                    samples_float, self.filter_states[filter_name] = signal.lfilter(
-                        b, a, samples_float, zi=self.filter_states[filter_name])
+                    band, self.filter_states[filter_name] = signal.lfilter(
+                        b, a, original, zi=self.filter_states[filter_name])
+                    samples_float += (gain - 1.0) * band
 
 
         if self.widgets['nr_check'].isChecked():
