@@ -344,6 +344,10 @@ class DSDApp(QMainWindow):
         self.transmission_log = {}
         self.last_logged_id = [None, None]
         self.output_stream = None; self.output_streams = {}; self.volume = 1.0
+# audio device selectors are created later; define placeholders so
+# early audio initialisation does not crash if they are accessed
+        self.device_combo1 = None
+        self.device_combo2 = None
         # audio device selectors are created later; define placeholders so
         # early audio initialisation does not crash if they are accessed
         self.device_combo1 = None
@@ -1589,6 +1593,11 @@ setMarkers({initial_markers});
         self.search_input.returnPressed.connect(self.search_in_log)
         layout.addWidget(splitter, 0, 0, 1, 2)
         layout.addWidget(self.search_input, 1, 0); layout.addWidget(self.search_button, 1, 1)
+
+        # Optional debug checkbox to toggle additional log output
+        self.debug_checkbox = self._add_widget('debug_check', QCheckBox("Debug"))
+        layout.addWidget(self.debug_checkbox, 2, 0, 1, 2)
+
         return outer_group
 
     def update_dual_tcp_ui(self, enabled):
@@ -2072,6 +2081,7 @@ setMarkers({initial_markers});
             return
 
         # Temporary debug logging to verify dual-channel traffic
+        # Debug: show incoming byte counts in GUI terminals
         msg = f"Channel {channel} received {len(raw_data)} bytes"
         if channel - 1 < len(self.terminal_outputs_conf):
             self.terminal_outputs_conf[channel - 1].appendPlainText(msg)
@@ -2105,6 +2115,10 @@ setMarkers({initial_markers});
                     self.output_streams[channel].write((data * self.volume).astype(AUDIO_DTYPE))
                 except Exception:
                     pass
+# audio device selectors are created later; define placeholders so
+# early audio initialisation does not crash if they are accessed
+        self.device_combo1 = None
+        self.device_combo2 = None
         else:
             frames = []
             n = min(len(self.channel_buffers[1]), len(self.channel_buffers[2]))
@@ -2686,4 +2700,3 @@ if __name__ == '__main__':
         sys.exit(app.exec_())
     else:
         sys.exit(0)
-
