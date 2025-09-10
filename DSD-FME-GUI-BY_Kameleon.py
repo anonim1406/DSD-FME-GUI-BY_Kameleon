@@ -1269,6 +1269,7 @@ class DSDApp(QMainWindow):
         ports = [UDP_PORT]
         if (self.widgets.get('dual_tcp') and self.widgets['dual_tcp'].isChecked() and
                 self.widgets.get('-i_type') and self.widgets['-i_type'].currentText() == 'tcp'):
+            # When dual TCP is enabled add a second UDP port listener
             ports.append(UDP_PORT + 1)
         for idx, port in enumerate(ports, start=1):
             thread = QThread()
@@ -1299,6 +1300,7 @@ class DSDApp(QMainWindow):
         if in_type == 'tcp':
             inputs.append(self.widgets['-i_tcp'].text())
             if dual:
+                # Include second TCP address when dual mode is enabled
                 inputs.append(self.widgets['-i_tcp2'].text())
         else:
             inputs.append(None)
@@ -1334,6 +1336,7 @@ class DSDApp(QMainWindow):
         for idx, tcp_addr in enumerate(inputs):
             cmd = [self.dsd_fme_path, "-o", f"udp:{UDP_IP}:{UDP_PORT + idx}"]
             if in_type == 'tcp':
+                # Each command uses a distinct TCP input and UDP output
                 cmd.extend(["-i", f"tcp:{tcp_addr}" if tcp_addr else "tcp"])
             elif in_type == 'wav':
                 if self.widgets['-i_wav'].text():
@@ -1617,6 +1620,10 @@ class DSDApp(QMainWindow):
             QMessageBox.critical(self, "UDP Error", raw_data.decode())
             self.close()
             return
+
+        # Temporary debug to ensure channel 2 is receiving data
+        if channel == 2:
+            print(f"Channel 2 received {len(raw_data)} bytes")
 
         clean_num_bytes = (len(raw_data) // np.dtype(AUDIO_DTYPE).itemsize) * np.dtype(AUDIO_DTYPE).itemsize
         if clean_num_bytes == 0:
