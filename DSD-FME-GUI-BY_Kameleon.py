@@ -936,11 +936,16 @@ class DSDApp(QMainWindow):
         controls.addStretch()
         layout.addLayout(controls)
 
-        self.map_view = QWebEngineView()
-        if not os.path.exists(MAP_FILE):
-            self.create_initial_map()
-        self.map_view.setUrl(QUrl.fromLocalFile(os.path.abspath(MAP_FILE)))
-        layout.addWidget(self.map_view)
+        # container where the map widget will live; store layout for later use
+        map_container = QWidget()
+        map_layout = QVBoxLayout(map_container)
+        self.widgets["map_layout"] = map_layout
+        layout.addWidget(map_container)
+
+        # initialize the map view
+        self.map_view = None
+        self.create_initial_map()
+
         return widget
     def create_initial_map(self):
         html = f"""
@@ -994,6 +999,11 @@ class DSDApp(QMainWindow):
 
         with open(MAP_FILE, 'w', encoding='utf-8') as f:
             f.write(html)
+
+        # replace existing map view if present
+        if getattr(self, "map_view", None):
+            self.widgets['map_layout'].removeWidget(self.map_view)
+            self.map_view.deleteLater()
 
         self.map_view = QWebEngineView(self)
         self.map_view.setUrl(QUrl.fromLocalFile(os.path.abspath(MAP_FILE)))
