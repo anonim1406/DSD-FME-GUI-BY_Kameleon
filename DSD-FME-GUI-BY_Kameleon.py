@@ -60,7 +60,7 @@ from pyqtgraph import DateAxisItem, AxisItem
 import sounddevice as sd
 from scipy import signal
 import folium
-from folium.plugins import MousePosition, Draw
+from folium.plugins import MousePosition
 
 try:
     import winsound
@@ -77,11 +77,6 @@ except ImportError:
 CONFIG_FILE = resource_path('dsd-fme-gui-config.json')
 ALIASES_FILE = resource_path('dsd-fme-aliases.json')
 MAP_FILE = resource_path('lrrp_map.html')
-MAP3D_FILE = resource_path('lrrp_map_3d.html')
-MGRS_LIB = '<script src="https://cdn.jsdelivr.net/npm/mgrs@1.0.0/mgrs.min.js"></script>'
-THREED_HTML = """<!DOCTYPE html><html><head><title>3D Map</title>
-<style>html,body,#map{height:100%;margin:0;}</style></head>
-<body><div id='map'>3D view placeholder</div></body></html>"""
 UDP_IP = "127.0.0.1"; UDP_PORT = 23456
 CHUNK_SAMPLES = 1024; SPEC_WIDTH = 400
 MIN_DB = -70; MAX_DB = 50
@@ -345,7 +340,6 @@ class DSDApp(QMainWindow):
         self.last_logged_id = [None, None]
         self.output_stream = None; self.output_streams = {}; self.volume = 1.0
         self.current_tile = 'CartoDB dark_matter'; self.manual_markers = []
-        self.geojson_layers = []
         self.filter_states = {}
         self.aliases = {'tg': {}, 'id': {}}
         self.current_tg = [None, None]; self.current_id = [None, None]; self.current_cc = [None, None]
@@ -912,22 +906,12 @@ class DSDApp(QMainWindow):
         controls = QHBoxLayout()
         self.map_tile_combo = QComboBox(); self.map_tile_combo.addItems(["Dark", "Satellite", "Topo"])
         self.map_tile_combo.currentTextChanged.connect(lambda _: self.create_initial_map())
-        self.map_mode_combo = QComboBox(); self.map_mode_combo.addItems(["2D", "3D"])
-        self.map_mode_combo.currentTextChanged.connect(self.update_map_mode)
-        self.coord_format_combo = QComboBox(); self.coord_format_combo.addItems(["Lat/Lon", "MGRS"])
+        self.coord_format_combo = QComboBox(); self.coord_format_combo.addItems(["Lat/Lon"])
         self.coord_format_combo.currentTextChanged.connect(lambda _: self.create_initial_map())
         self.add_marker_btn = QPushButton("Add Marker"); self.add_marker_btn.clicked.connect(self.add_marker_dialog)
-        self.import_geojson_btn = QPushButton("Import GeoJSON"); self.import_geojson_btn.clicked.connect(self.import_geojson_layer)
-        self.export_png_btn = QPushButton("Export PNG"); self.export_png_btn.clicked.connect(self.export_map_png)
-        self.export_json_btn = QPushButton("Export JSON"); self.export_json_btn.clicked.connect(self.export_map_json)
         controls.addWidget(QLabel("Tiles:")); controls.addWidget(self.map_tile_combo)
-        controls.addWidget(QLabel("Mode:")); controls.addWidget(self.map_mode_combo)
         controls.addWidget(QLabel("Coords:")); controls.addWidget(self.coord_format_combo)
-        controls.addWidget(self.add_marker_btn)
-        controls.addWidget(self.import_geojson_btn)
-        controls.addWidget(self.export_png_btn)
-        controls.addWidget(self.export_json_btn)
-        controls.addStretch()
+        controls.addWidget(self.add_marker_btn); controls.addStretch()
         layout.addLayout(controls)
 
         self.map_view = QWebEngineView()
@@ -946,19 +930,11 @@ class DSDApp(QMainWindow):
         }
         self.current_tile = tile_map.get(self.map_tile_combo.currentText(), 'CartoDB dark_matter') if hasattr(self, 'map_tile_combo') else self.current_tile
         map_obj = folium.Map(location=[52.237, 21.017], zoom_start=6, tiles=self.current_tile)
-        if self.coord_format_combo.currentText() == "MGRS":
-            map_obj.get_root().html.add_child(folium.Element(MGRS_LIB))
-            formatter = "function(lat, lng){return mgrs.forward([lng, lat]);}"
-            MousePosition(position='topright', separator=' ', numDigits=5, formatter=formatter).add_to(map_obj)
-        else:
-            MousePosition(position='topright', separator=' , ', numDigits=5).add_to(map_obj)
-        Draw(export=True).add_to(map_obj)
+        MousePosition(position='topright', separator=' , ', numDigits=5).add_to(map_obj)
         for m in getattr(self, 'manual_markers', []):
             folium.Marker(location=[m['lat'], m['lon']], tooltip=m.get('label', 'Marker')).add_to(map_obj)
-        for gj in getattr(self, 'geojson_layers', []):
-            folium.GeoJson(gj).add_to(map_obj)
         map_obj.save(MAP_FILE)
-        if hasattr(self, 'map_view') and self.map_mode_combo.currentText() == "2D":
+        if hasattr(self, 'map_view'):
             self.map_view.setUrl(QUrl.fromLocalFile(os.path.abspath(MAP_FILE)))
             self.map_view.reload()
 
@@ -972,42 +948,6 @@ class DSDApp(QMainWindow):
                 self.create_initial_map()
             except Exception:
                 QMessageBox.warning(self, "Input Error", "Invalid coordinates")
-
-    def import_geojson_layer(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Import GeoJSON", "", "GeoJSON Files (*.geojson *.json)")
-        if not path:
-            return
-        try:
-            with open(path, 'r') as f:
-                data = json.load(f)
-            self.geojson_layers.append(data)
-            self.create_initial_map()
-        except Exception as e:
-            QMessageBox.warning(self, "Import Error", f"Failed to import GeoJSON: {e}")
-
-    def export_map_png(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export Map to PNG", "", "PNG Files (*.png)")
-        if path:
-            pix = self.map_view.grab()
-            pix.save(path, 'PNG')
-
-    def export_map_json(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export Markers to JSON", "", "JSON Files (*.json)")
-        if path:
-            try:
-                with open(path, 'w') as f:
-                    json.dump(self.manual_markers, f)
-            except Exception as e:
-                QMessageBox.warning(self, "Export Error", f"Failed to export: {e}")
-
-    def update_map_mode(self):
-        if self.map_mode_combo.currentText() == "3D":
-            if not os.path.exists(MAP3D_FILE):
-                with open(MAP3D_FILE, 'w') as f:
-                    f.write(THREED_HTML)
-            self.map_view.setUrl(QUrl.fromLocalFile(os.path.abspath(MAP3D_FILE)))
-        else:
-            self.create_initial_map()
 
     def update_map_from_lrrp(self, path):
         print(f"LRRP file changed: {path}")
@@ -1502,6 +1442,11 @@ class DSDApp(QMainWindow):
         self.search_input.returnPressed.connect(self.search_in_log)
         layout.addWidget(splitter, 0, 0, 1, 2)
         layout.addWidget(self.search_input, 1, 0); layout.addWidget(self.search_button, 1, 1)
+
+        # Optional debug checkbox to toggle additional log output
+        self.debug_checkbox = self._add_widget('debug_check', QCheckBox("Debug"))
+        layout.addWidget(self.debug_checkbox, 2, 0, 1, 2)
+
         return outer_group
 
     def update_dual_tcp_ui(self, enabled):
@@ -2596,4 +2541,3 @@ if __name__ == '__main__':
         sys.exit(app.exec_())
     else:
         sys.exit(0)
-
