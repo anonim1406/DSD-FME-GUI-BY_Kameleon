@@ -735,12 +735,15 @@ class DSDApp(QMainWindow):
             self.colormap_combo = QComboBox(); self.colormap_combo.addItems(self.colormaps.keys()); self.colormap_combo.currentTextChanged.connect(lambda name: self.imv.setColorMap(self.colormaps[name]))
             main_layout.addWidget(QLabel("Spectrogram:"), 5, 0); main_layout.addWidget(self.colormap_combo, 5, 1, 1, 2)
 
+            self.spec_source_combo = QComboBox(); self.spec_source_combo.addItems(["Port 1", "Port 2"]); self.spec_source_combo.currentIndexChanged.connect(lambda _ : self.spec_data.fill(MIN_DB))
+            main_layout.addWidget(QLabel("Spec Source:"), 6, 0); main_layout.addWidget(self.spec_source_combo, 6, 1, 1, 2)
+
             self.recorder_enabled_check_dash = QCheckBox("Enable Rec."); self.recorder_enabled_check_dash.toggled.connect(lambda state: self.recorder_enabled_check.setChecked(state)); self._add_widget('recorder_enabled_check_dash', self.recorder_enabled_check_dash)
-            main_layout.addWidget(self.recorder_enabled_check_dash, 6, 0)
+            main_layout.addWidget(self.recorder_enabled_check_dash, 7, 0)
 
             self.btn_start_dash = QPushButton("START"); self.btn_start_dash.clicked.connect(self.start_process)
             self.btn_stop_dash = QPushButton("STOP"); self.btn_stop_dash.setEnabled(False); self.btn_stop_dash.clicked.connect(self.stop_process)
-            main_layout.addWidget(self.btn_start_dash, 6, 1); main_layout.addWidget(self.btn_stop_dash, 6, 2)
+            main_layout.addWidget(self.btn_start_dash, 7, 1); main_layout.addWidget(self.btn_stop_dash, 7, 2)
 
         self.device_combo.currentIndexChanged.connect(self.restart_audio_stream); self.volume_slider.valueChanged.connect(self.set_volume)
         return group
@@ -1768,29 +1771,31 @@ class DSDApp(QMainWindow):
                 except Exception:
                     pass
 
-        if hasattr(self, 'scope_curve'):
-            self.scope_curve.setData(audio_samples)
+        show_visuals = not hasattr(self, 'spec_source_combo') or self.spec_source_combo.currentIndex() + 1 == channel
+        if show_visuals:
+            if hasattr(self, 'scope_curve'):
+                self.scope_curve.setData(audio_samples)
 
-        audio_samples_float = audio_samples.astype(np.float32) / 32768.0
+            audio_samples_float = audio_samples.astype(np.float32) / 32768.0
 
-        if hasattr(self, 'rms_label'):
-            self.rms_label.setText(f"RMS: {np.sqrt(np.mean(audio_samples_float**2)):.4f}")
+            if hasattr(self, 'rms_label'):
+                self.rms_label.setText(f"RMS: {np.sqrt(np.mean(audio_samples_float**2)):.4f}")
 
-        if len(audio_samples_float) < CHUNK_SAMPLES:
-            audio_samples_float = np.pad(audio_samples_float, (0, CHUNK_SAMPLES - len(audio_samples_float)))
+            if len(audio_samples_float) < CHUNK_SAMPLES:
+                audio_samples_float = np.pad(audio_samples_float, (0, CHUNK_SAMPLES - len(audio_samples_float)))
 
-        with np.errstate(divide='ignore', invalid='ignore'):
-            magnitude = np.abs(np.fft.fft(audio_samples_float)[:CHUNK_SAMPLES // 2])
-            log_magnitude = 20 * np.log10(magnitude + 1e-12)
-        log_magnitude = np.nan_to_num(log_magnitude, nan=MIN_DB, posinf=MAX_DB, neginf=MIN_DB)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                magnitude = np.abs(np.fft.fft(audio_samples_float)[:CHUNK_SAMPLES // 2])
+                log_magnitude = 20 * np.log10(magnitude + 1e-12)
+            log_magnitude = np.nan_to_num(log_magnitude, nan=MIN_DB, posinf=MAX_DB, neginf=MIN_DB)
 
-        if hasattr(self, 'peak_freq_label'):
-            self.peak_freq_label.setText(f"Peak: {np.argmax(log_magnitude) * (AUDIO_RATE / CHUNK_SAMPLES):.0f} Hz")
+            if hasattr(self, 'peak_freq_label'):
+                self.peak_freq_label.setText(f"Peak: {np.argmax(log_magnitude) * (AUDIO_RATE / CHUNK_SAMPLES):.0f} Hz")
 
-        if hasattr(self, 'spec_data') and hasattr(self, 'imv'):
-            self.spec_data = np.roll(self.spec_data, -1, axis=0)
-            self.spec_data[-1, :] = log_magnitude
-            self.imv.setImage(np.rot90(self.spec_data), autoLevels=False, levels=(MIN_DB, MAX_DB))
+            if hasattr(self, 'spec_data') and hasattr(self, 'imv'):
+                self.spec_data = np.roll(self.spec_data, -1, axis=0)
+                self.spec_data[-1, :] = log_magnitude
+                self.imv.setImage(np.rot90(self.spec_data), autoLevels=False, levels=(MIN_DB, MAX_DB))
 
     def search_in_log(self):
         term = self.terminal_outputs_conf[0]
