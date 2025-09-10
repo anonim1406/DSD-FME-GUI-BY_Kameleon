@@ -961,8 +961,11 @@ class DSDApp(QMainWindow):
                 <meta charset=\"utf-8\" />
                 <style>
                     html, body, #map {{ height: 100%; margin: 0; }}
+codex/fix-keyerror-for-map_layout-n9olz3
+
 codex/fix-keyerror-for-map_layout-kwrc9z
 codex/fix-keyerror-for-map_layout-6zslwz
+main
 main
                 </style>
                 <link rel=\"stylesheet\" href=\"{leaflet_css}\" />
@@ -979,6 +982,14 @@ main
                             markers.clearLayers();
                             data.forEach(d => L.marker(d, {{draggable:true}}).addTo(markers));
                         }};
+codex/fix-keyerror-for-map_layout-n9olz3
+                    }}
+                </script>
+                <script src=\"{leaflet_js}\"></script>
+                <script>
+                    document.addEventListener('DOMContentLoaded', __initMap);
+                </script>
+
 codex/fix-keyerror-for-map_layout-kwrc9z
                     }}
                 </script>
@@ -998,6 +1009,7 @@ codex/fix-keyerror-for-map_layout-kwrc9z
                 <script src=\"{leaflet_js}\"></script>
                 <link rel=\"stylesheet\" href=\"assets/leaflet/leaflet.css\" />
                 <script src=\"assets/leaflet/leaflet.js\"></script>
+main
 main
 main
 main
@@ -1759,6 +1771,10 @@ main
                     freq_str = f"{freq_val}{freq_map.get(unit, '')}"
                     rtl_params = [freq_str, gain, ppm, bw, sq, vol]
                     dev_index = self.widgets["rtl_dev"].currentData()
+codex/fix-keyerror-for-map_layout-n9olz3
+                    if dev_index is None:
+                        dev_index = 0
+                    rtl_params.insert(0, str(dev_index))
 codex/fix-keyerror-for-map_layout-kwrc9z
                     if dev_index is None:
                         dev_index = 0
@@ -1766,6 +1782,7 @@ codex/fix-keyerror-for-map_layout-kwrc9z
 
                     if dev_index is not None:
                         rtl_params.insert(0, str(dev_index))
+main
 main
                     cmd.extend(["-i", f"rtl:{':'.join(p for p in rtl_params if p)}"])
                 except ValueError:
@@ -1799,11 +1816,12 @@ main
         if not commands:
             return
 
-        lrrp_file_path = self.widgets["-L"].text()
-        if lrrp_file_path:
+        # Watch LRRP updates only when a file path is provided
+        lrrp_path = self.widgets["-L"].text()
+        if lrrp_path:
             if self.lrrp_watcher.files():
                 self.lrrp_watcher.removePaths(self.lrrp_watcher.files())
-            self.lrrp_watcher.addPath(lrrp_file_path)
+            self.lrrp_watcher.addPath(lrrp_path)
 
         self.restart_audio_streams()
         self.start_udp_listeners(len(commands))
