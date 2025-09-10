@@ -2080,6 +2080,7 @@ setMarkers({initial_markers});
             self.close()
             return
 
+        # Temporary debug logging to verify dual-channel traffic
         # Debug: show incoming byte counts in GUI terminals
         msg = f"Channel {channel} received {len(raw_data)} bytes"
         if channel - 1 < len(self.terminal_outputs_conf):
@@ -2112,6 +2113,8 @@ setMarkers({initial_markers});
             if (not mute or not mute.isChecked()) and channel in self.output_streams:
                 try:
                     self.output_streams[channel].write((data * self.volume).astype(AUDIO_DTYPE))
+                except Exception:
+                    pass
 # audio device selectors are created later; define placeholders so
 # early audio initialisation does not crash if they are accessed
         self.device_combo1 = None
