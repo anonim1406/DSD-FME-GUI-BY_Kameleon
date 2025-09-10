@@ -11,6 +11,7 @@ import csv
 import socket
 import time
 import numpy as np
+import importlib.util
 
 # --- AppData Storage ---
 APP_NAME = "DSD-FME-GUI"
@@ -80,6 +81,22 @@ CHUNK_SAMPLES = 1024; SPEC_WIDTH = 400
 MIN_DB = -70; MAX_DB = 50
 AUDIO_RATE = 16000; AUDIO_DTYPE = np.int16
 WAV_CHANNELS = 2; WAV_SAMPWIDTH = 2
+
+def run_selftest():
+    issues = []
+    for mod in ["numpy", "PyQt5", "pyqtgraph", "sounddevice", "scipy"]:
+        if importlib.util.find_spec(mod) is None:
+            issues.append(f"Missing package: {mod}")
+    try:
+        info = sd.query_devices()
+        if not any(d.get('max_output_channels', 0) >= 2 for d in info):
+            issues.append("No stereo output device found")
+    except Exception as e:
+        issues.append(f"Audio device check failed: {e}")
+    if issues:
+        QMessageBox.critical(None, "Self-test failed", "\n".join(issues))
+        return False
+    return True
 
 class IntegerAxis(AxisItem):
     def tickStrings(self, values, scale, spacing):
@@ -645,12 +662,23 @@ class DSDApp(QMainWindow):
         visuals_layout = QHBoxLayout(visuals_widget)
         visuals_splitter = QSplitter(Qt.Horizontal)
 
+        spec_container = QWidget()
+        spec_layout = QVBoxLayout(spec_container)
+
         self.imv = pg.ImageView()
         self.imv.ui.roiBtn.hide()
         self.imv.ui.menuBtn.hide()
         self.imv.ui.histogram.hide()
         self.histogram.setImageItem(self.imv.imageItem)
-        visuals_splitter.addWidget(self.imv)
+        spec_layout.addWidget(self.imv)
+
+        self.spec_source_combo = QComboBox()
+        self.spec_source_combo.addItems(["Port 1", "Port 2"])
+        self.spec_source_combo.currentIndexChanged.connect(lambda _ : self.spec_data.fill(MIN_DB))
+        spec_layout.addWidget(QLabel("Spectrogram Source:"))
+        spec_layout.addWidget(self.spec_source_combo)
+
+        visuals_splitter.addWidget(spec_container)
 
         self.scope_widget = pg.PlotWidget(title="")
         self.scope_widget.getAxis('left').setWidth(50)
@@ -1758,7 +1786,10 @@ class DSDApp(QMainWindow):
             if len(self.channel_buffers[ch]) > 0 and len(self.channel_buffers[other]) == 0:
                 data = self.channel_buffers[ch]
                 self.channel_buffers[ch] = np.array([], dtype=AUDIO_DTYPE)
-                frames.append(np.column_stack((data, data)))
+                if ch == 1:
+                    frames.append(np.column_stack((data, np.zeros_like(data))))
+                else:
+                    frames.append(np.column_stack((np.zeros_like(data), data)))
 
         if self.is_recording and self.wav_file:
             for frame in frames:
@@ -2233,6 +2264,8 @@ if __name__ == '__main__':
     if hasattr(Qt, 'AA_UseHighDpiPixmaps'): QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
     app = QApplication(sys.argv)
+    if not run_selftest():
+        sys.exit(1)
 
     main_window = DSDApp()
 
