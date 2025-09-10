@@ -187,10 +187,10 @@ class AudioProcessingWindow(QDialog):
             label.setAlignment(Qt.AlignCenter)
 
             slider = QSlider(Qt.Vertical)
-            slider.setRange(-20, 20)
+            slider.setRange(-12, 12)
             slider.setValue(0)
             slider.setTickPosition(QSlider.TicksBothSides)
-            slider.setTickInterval(5)
+            slider.setTickInterval(3)
             self.main_app._add_widget(f'eq{port}_band_{i}', slider)
 
             slider_v_layout.addWidget(label)
@@ -936,53 +936,52 @@ class DSDApp(QMainWindow):
         controls.addStretch()
         layout.addLayout(controls)
 
-        self.map_view = QWebEngineView()
-        if not os.path.exists(MAP_FILE):
-            self.create_initial_map()
-        self.map_view.setUrl(QUrl.fromLocalFile(os.path.abspath(MAP_FILE)))
-        layout.addWidget(self.map_view)
+        # container where the map widget will live; store layout for later use
+        map_container = QWidget()
+        map_layout = QVBoxLayout(map_container)
+        self.widgets["map_layout"] = map_layout
+        layout.addWidget(map_container)
+
+        # initialize the map view
+        self.map_view = None
+        self.create_initial_map()
+
         return widget
     def create_initial_map(self):
+        assets_dir = os.path.join(os.path.abspath("."), "assets", "leaflet")
+        tiles_dir = os.path.join(os.path.abspath("."), "tiles")
+        leaflet_css = QUrl.fromLocalFile(os.path.join(assets_dir, "leaflet.css")).toString()
+        leaflet_js = QUrl.fromLocalFile(os.path.join(assets_dir, "leaflet.js")).toString()
+        tiles_url = QUrl.fromLocalFile(os.path.join(tiles_dir, "")).toString()
         html = f"""
             <!DOCTYPE html>
             <html>
             <head>
                 <title>Map</title>
+                <meta charset=\"utf-8\" />
                 <style>
-                    html, body, #map {{
-                        height: 100%;
-                        margin: 0;
-                    }}
+                    html, body, #map {{ height: 100%; margin: 0; }}
                 </style>
-                <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-                <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"/>
-                <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
-                <script src="https://cdn.jsdelivr.net/npm/leaflet.grid@0.3.0/leaflet-grid.js"></script>
-                <script src="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
-                <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
-                <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
-                <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
-                <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
-                {MGRS_LIB}
-                <style>
-                    .lrrp-marker {{
-                        animation: pulse 2s infinite;
+                <link rel=\"stylesheet\" href=\"{leaflet_css}\" />
+                <script>
+                    function __initMap() {{
+                        var map = L.map('map', {{minZoom:0, maxZoom:2}}).setView([0,0], 1);
+                        var markers = L.layerGroup().addTo(map);
+                        L.tileLayer('{tiles_url}{{z}}/{{x}}/{{y}}.png', {{noWrap:true, minZoom:0, maxZoom:2, attribution:''}}).addTo(map);
+                        map.on('click', function(e) {{
+                            L.marker(e.latlng, {{draggable:true}}).addTo(markers);
+                        }});
+                        window.getMarkers = function() {{ return markers.getLayers().map(m => m.getLatLng()); }};
+                        window.setMarkers = function(data) {{
+                            markers.clearLayers();
+                            data.forEach(d => L.marker(d, {{draggable:true}}).addTo(markers));
+                        }};
                     }}
-                    @keyframes pulse {{
-                        0% {{
-                            transform: scale(0.9);
-                            box-shadow: 0 0 0 0 rgba(204, 169, 44, 0.4);
-                        }}
-                        70% {{
-                            transform: scale(1);
-                            box-shadow: 0 0 0 10px rgba(204, 169, 44, 0);
-                        }}
-                        100% {{
-                            transform: scale(0.9);
-                            box-shadow: 0 0 0 0 rgba(204, 169, 44, 0);
-                        }}
-                    }}
-                </style>
+                </script>
+                <script src=\"{leaflet_js}\"></script>
+                <script>
+                    document.addEventListener('DOMContentLoaded', __initMap);
+                </script>
             </head>
             <body>
             <div id='map'></div>
@@ -994,6 +993,11 @@ class DSDApp(QMainWindow):
 
         with open(MAP_FILE, 'w', encoding='utf-8') as f:
             f.write(html)
+
+        # replace existing map view if present
+        if getattr(self, "map_view", None):
+            self.widgets['map_layout'].removeWidget(self.map_view)
+            self.map_view.deleteLater()
 
         self.map_view = QWebEngineView(self)
         self.map_view.setUrl(QUrl.fromLocalFile(os.path.abspath(MAP_FILE)))
@@ -1149,14 +1153,18 @@ class DSDApp(QMainWindow):
         self._add_widget("rtl_gain", QLineEdit("0")); self._add_widget("rtl_ppm", QLineEdit("0"))
         self._add_widget("rtl_bw", QComboBox()); self.widgets["rtl_bw"].addItems(["12", "4", "6", "8", "16", "24"])
         self._add_widget("rtl_sq", QLineEdit("0")); self._add_widget("rtl_vol", QLineEdit("2"))
-        l_rtl.addWidget(QLabel("Device:"), 0, 0); l_rtl.addWidget(self.widgets["rtl_dev"], 0, 1); l_rtl.addWidget(self.rtl_refresh_btn, 0, 2)
+        self.rtl_dev_label = QLabel("Device:")
+        l_rtl.addWidget(self.rtl_dev_label, 0, 0); l_rtl.addWidget(self.widgets["rtl_dev"], 0, 1); l_rtl.addWidget(self.rtl_refresh_btn, 0, 2)
         l_rtl.addWidget(QLabel("Frequency:"), 1, 0); l_rtl.addWidget(self.widgets["rtl_freq"], 1, 1); l_rtl.addWidget(self.widgets["rtl_unit"], 1, 2)
         l_rtl.addWidget(QLabel("Gain (0=auto):"), 2, 0); l_rtl.addWidget(self.widgets["rtl_gain"], 2, 1); l_rtl.addWidget(QLabel("PPM Error:"), 3, 0); l_rtl.addWidget(self.widgets["rtl_ppm"], 3, 1)
         l_rtl.addWidget(QLabel("Bandwidth (kHz):"), 4, 0); l_rtl.addWidget(self.widgets["rtl_bw"], 4, 1)
         l_rtl.addWidget(QLabel("Squelch Level:"), 5, 0); l_rtl.addWidget(self.widgets["rtl_sq"], 5, 1)
         l_rtl.addWidget(QLabel("Sample Volume:"), 6, 0); l_rtl.addWidget(self.widgets["rtl_vol"], 6, 1)
         layout.addWidget(self.rtl_group)
-        self._populate_rtl_devices()
+        # hide manual device selection; dsd-fme will pick first RTL automatically
+        self.rtl_dev_label.hide()
+        self.widgets["rtl_dev"].hide()
+        self.rtl_refresh_btn.hide()
 
         def toggle_input_options(text):
             is_rtl = (text == 'rtl')
@@ -1211,24 +1219,33 @@ class DSDApp(QMainWindow):
 
     def _populate_rtl_devices(self):
         combo = self.widgets.get("rtl_dev")
-        if not combo: return
+        if not combo:
+            return
         combo.clear()
+        combo.setEditable(True)
         if not RTLSDR_AVAILABLE:
-            combo.addItem("pyrtlsdr not found!")
-            combo.setEnabled(False)
+            for i in range(2):
+                combo.addItem(f"#{i}", userData=i)
+            combo.setToolTip("pyrtlsdr not installed; enter device index manually")
             self.rtl_refresh_btn.setEnabled(False)
             return
         try:
             devices = RtlSdr.get_device_serial_addresses()
-            if not devices:
-                combo.addItem("No RTL-SDR devices found.")
-                return
-            for i, serial in enumerate(devices):
-                combo.addItem(f"#{i}: {serial}", userData=i)
+            if devices:
+                for i, serial in enumerate(devices):
+                    combo.addItem(f"#{i}: {serial}", userData=i)
+            else:
+                count = RtlSdr.get_device_count()
+                if count == 0:
+                    combo.addItem("No RTL-SDR devices found.")
+                else:
+                    for i in range(count):
+                        combo.addItem(f"#{i}", userData=i)
         except Exception as e:
-            combo.addItem("Error querying devices")
             print(f"Error enumerating RTL-SDR devices: {e}")
-            QMessageBox.critical(self, "RTL-SDR Error", f"Could not list RTL-SDR devices.\nMake sure drivers (e.g., Zadig) are correctly installed and libusb is accessible.\n\nError: {e}")
+            for i in range(2):
+                combo.addItem(f"#{i}", userData=i)
+            QMessageBox.warning(self, "RTL-SDR", "Could not list devices. Enter index manually.")
 
     def _populate_audio_input_devices(self):
         combo = self.widgets.get("audio_in_dev")
@@ -1695,12 +1712,7 @@ class DSDApp(QMainWindow):
                     QMessageBox.critical(self, "Error", "No audio input device selected.")
                     return []
             elif in_type == 'rtl':
-                dev_index = self.widgets["rtl_dev"].currentData()
-                if dev_index is None:
-                    QMessageBox.critical(self, "Error", "No RTL-SDR device selected or found.")
-                    return []
                 try:
-                    dev = str(dev_index)
                     freq_val = float(self.widgets["rtl_freq"].text())
                     unit = self.widgets["rtl_unit"].currentText()
                     gain = self.widgets["rtl_gain"].text()
@@ -1708,9 +1720,13 @@ class DSDApp(QMainWindow):
                     bw = self.widgets["rtl_bw"].currentText()
                     sq = self.widgets["rtl_sq"].text()
                     vol = self.widgets["rtl_vol"].text()
-                    freq_map = {"MHz": "M", "KHz": "K", "GHz": "G"}
+                    freq_map = {"MHz": "M", "KHz": "K", "GHz": "G", "Hz": ""}
                     freq_str = f"{freq_val}{freq_map.get(unit, '')}"
-                    rtl_params = [dev, freq_str, gain, ppm, bw, sq, vol]
+                    rtl_params = [freq_str, gain, ppm, bw, sq, vol]
+                    dev_index = self.widgets["rtl_dev"].currentData()
+                    if dev_index is None:
+                        dev_index = 0
+                    rtl_params.insert(0, str(dev_index))
                     cmd.extend(["-i", f"rtl:{':'.join(p for p in rtl_params if p)}"])
                 except ValueError:
                     QMessageBox.critical(self, "Error", "Invalid frequency value.")
@@ -1743,11 +1759,12 @@ class DSDApp(QMainWindow):
         if not commands:
             return
 
-        lrrp_file_path = self.widgets["-L"].text()
-        if lrrp_file_path:
+        # Watch LRRP updates only when a file path is provided
+        lrrp_path = self.widgets["-L"].text()
+        if lrrp_path:
             if self.lrrp_watcher.files():
                 self.lrrp_watcher.removePaths(self.lrrp_watcher.files())
-            self.lrrp_watcher.addPath(lrrp_file_path)
+            self.lrrp_watcher.addPath(lrrp_path)
 
         self.restart_audio_streams()
         self.start_udp_listeners(len(commands))
@@ -2587,19 +2604,23 @@ class DSDApp(QMainWindow):
                 sliders = self.eq_sliders[2] if channel == 2 else []
             else:
                 sliders = self.eq_sliders.get(channel, [])
-            for i, slider in enumerate(sliders):
-                gain_db = slider.value()
-                if abs(gain_db) > 0.1:  # Apply only if there is a change
+            if any(abs(s.value()) > 0.1 for s in sliders):
+                original = samples_float.copy()
+                for i, slider in enumerate(sliders):
+                    gain_db = slider.value()
+                    if abs(gain_db) <= 0.1:
+                        continue
                     center_freq = eq_bands[i]
                     q_factor = 3.0
                     b, a = signal.iirpeak(center_freq, q_factor, fs=AUDIO_RATE)
-                    b *= 10 ** (gain_db / 20.0)
+                    gain = 10 ** (gain_db / 20.0)
 
                     filter_name = f'eq_filter_{channel}_{i}'
                     if filter_name not in self.filter_states:
                         self.filter_states[filter_name] = signal.lfilter_zi(b, a)
-                    samples_float, self.filter_states[filter_name] = signal.lfilter(
-                        b, a, samples_float, zi=self.filter_states[filter_name])
+                    band, self.filter_states[filter_name] = signal.lfilter(
+                        b, a, original, zi=self.filter_states[filter_name])
+                    samples_float += (gain - 1.0) * band
 
 
         if self.widgets['nr_check'].isChecked():
