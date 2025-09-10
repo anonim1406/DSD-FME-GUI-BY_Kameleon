@@ -11,6 +11,7 @@ import csv
 import socket
 import time
 import numpy as np
+import importlib.util
 
 # --- AppData Storage ---
 APP_NAME = "DSD-FME-GUI"
@@ -80,6 +81,22 @@ CHUNK_SAMPLES = 1024; SPEC_WIDTH = 400
 MIN_DB = -70; MAX_DB = 50
 AUDIO_RATE = 16000; AUDIO_DTYPE = np.int16
 WAV_CHANNELS = 2; WAV_SAMPWIDTH = 2
+
+def run_selftest():
+    issues = []
+    for mod in ["numpy", "PyQt5", "pyqtgraph", "sounddevice", "scipy"]:
+        if importlib.util.find_spec(mod) is None:
+            issues.append(f"Missing package: {mod}")
+    try:
+        info = sd.query_devices()
+        if not any(d.get('max_output_channels', 0) >= 2 for d in info):
+            issues.append("No stereo output device found")
+    except Exception as e:
+        issues.append(f"Audio device check failed: {e}")
+    if issues:
+        QMessageBox.critical(None, "Self-test failed", "\n".join(issues))
+        return False
+    return True
 
 class IntegerAxis(AxisItem):
     def tickStrings(self, values, scale, spacing):
@@ -277,13 +294,15 @@ class DSDApp(QMainWindow):
         self.reader_workers = []
         self.udp_listener_threads = []
         self.udp_listeners = []
-        self.is_in_transmission = False; self.alerts = []; self.recording_dir = ""
+        # track state per channel (1 & 2)
+        self.is_in_transmission = [False, False]; self.alerts = []; self.recording_dir = ""
         self.is_recording = False; self.wav_file = None; self.is_resetting = False
-        self.transmission_log = {}; self.last_logged_id = None
+        self.transmission_log = {}
+        self.last_logged_id = [None, None]
         self.output_stream = None; self.volume = 1.0
         self.filter_states = {}
         self.aliases = {'tg': {}, 'id': {}}
-        self.current_tg = None; self.current_id = None; self.current_cc = None
+        self.current_tg = [None, None]; self.current_id = [None, None]; self.current_cc = [None, None]
         self.fs_watcher = QFileSystemWatcher(); self.fs_watcher.directoryChanged.connect(self.update_recording_list)
         self.lrrp_watcher = QFileSystemWatcher()
         self.lrrp_watcher.fileChanged.connect(self.update_map_from_lrrp)
@@ -292,7 +311,8 @@ class DSDApp(QMainWindow):
         self.setGeometry(100, 100, 1600, 950)
 
         self.widgets = {}; self.inverse_widgets = {}
-        self.live_labels_conf = {}; self.live_labels_dash = {}
+        # live analysis panels for configuration and dashboard (per channel)
+        self.live_labels_conf = [{}, {}]; self.live_labels_dash = [{}, {}]
 
         self._create_theme_manager()
 
@@ -303,7 +323,7 @@ class DSDApp(QMainWindow):
             "Night Vision": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,20,0),(0,180,80),(100,255,150)]), "Arctic Blue": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,0,0),(0,0,150),(100,180,255)])
         }
 
-        self.dsd_fme_path = self._load_config_or_prompt()
+        self.dsd_fme_path, self.dsd_fme_path2 = self._load_config_or_prompt()
         if self.dsd_fme_path:
             self._init_ui()
             self.audio_lab_window = AudioProcessingWindow(self)
@@ -337,7 +357,10 @@ class DSDApp(QMainWindow):
         if not app: return
 
         app.setPalette(theme["palette"]())
-        app.setStyleSheet(theme["stylesheet"]())
+        style = theme["stylesheet"]()
+        if theme_name not in ("Default (Kameleon Dark)", "Oceanic (Deep Blue)"):
+            style += " QGroupBox{border-width:2px;}"
+        app.setStyleSheet(style)
 
         pg.setConfigOption('background', theme["pg_background"])
         pg.setConfigOption('foreground', theme["pg_foreground"])
@@ -427,28 +450,49 @@ class DSDApp(QMainWindow):
         if os.path.exists(target_config_file):
             try:
                 with open(target_config_file, 'r') as f: config = json.load(f)
-            except json.JSONDecodeError: pass
+            except json.JSONDecodeError:
+                pass
 
         self.current_theme_name = config.get('current_theme', "Default (Kameleon Dark)")
 
-        path = config.get('dsd_fme_path')
-        if path and os.path.exists(path): return path
+        p1 = config.get('dsd_fme_path')
+        p2 = config.get('dsd_fme_path2')
+        if p1 and os.path.exists(p1):
+            if p2 and not os.path.exists(p2):
+                p2 = None
+            return p1, p2
 
         local_dsd_path = os.path.join(os.path.abspath("."), 'dsd-fme.exe')
         if os.path.exists(local_dsd_path):
-            path = local_dsd_path
-            config_to_save = {'dsd_fme_path': path, 'current_theme': self.current_theme_name}
-            with open(CONFIG_FILE, 'w') as f: json.dump(config_to_save, f, indent=4)
-            return path
+            p1 = local_dsd_path
+            config_to_save = {'dsd_fme_path': p1, 'dsd_fme_path2': p2, 'current_theme': self.current_theme_name}
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(config_to_save, f, indent=4)
+            return p1, p2
 
         QMessageBox.information(self, "Setup", "Please locate your 'dsd-fme.exe' file.")
-        path, _ = QFileDialog.getOpenFileName(self, "Select dsd-fme.exe", "", "Executable Files (dsd-fme.exe dsd-fme)")
-        if path and ("dsd-fme" in os.path.basename(path).lower()):
-            config_to_save = {'dsd_fme_path': path, 'current_theme': self.current_theme_name}
-            with open(CONFIG_FILE, 'w') as f: json.dump(config_to_save, f, indent=4)
-            return path
+        p1, _ = QFileDialog.getOpenFileName(self, "Select dsd-fme.exe", "", "Executable Files (dsd-fme.exe dsd-fme)")
+        if p1 and ("dsd-fme" in os.path.basename(p1).lower()):
+            reply = QMessageBox.question(
+                self,
+                "Dual Mode",
+                "Dual mode requires a second copy of dsd-fme.\nDo you want to locate it now?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            if reply == QMessageBox.Yes:
+                p2, _ = QFileDialog.getOpenFileName(self, "Select second dsd-fme.exe", "", "Executable Files (dsd-fme.exe dsd-fme)")
+                if not (p2 and os.path.exists(p2)):
+                    p2 = None
+            else:
+                QMessageBox.information(self, "Dual Mode Disabled", "Dual mode will be unavailable until a second path is set.")
+            config_to_save = {'dsd_fme_path': p1, 'dsd_fme_path2': p2, 'current_theme': self.current_theme_name}
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(config_to_save, f, indent=4)
+            return p1, p2
         else:
-            QMessageBox.critical(self, "Error", "DSD-FME not selected. The application cannot function without it."); return None
+            QMessageBox.critical(self, "Error", "DSD-FME not selected. The application cannot function without it.")
+            return None, None
 
     def _load_app_config(self):
         config = {}
@@ -460,6 +504,11 @@ class DSDApp(QMainWindow):
         self.current_theme_name = config.get('current_theme', "Default (Kameleon Dark)")
         if hasattr(self, 'theme_combo'): self.theme_combo.setCurrentText(self.current_theme_name)
         self.apply_theme(self.current_theme_name)
+
+        self.dsd_fme_path = config.get('dsd_fme_path', self.dsd_fme_path)
+        self.dsd_fme_path2 = config.get('dsd_fme_path2', self.dsd_fme_path2)
+        if 'dsd_path1' in self.widgets: self.widgets['dsd_path1'].setText(self.dsd_fme_path or '')
+        if 'dsd_path2' in self.widgets: self.widgets['dsd_path2'].setText(self.dsd_fme_path2 or '')
 
         self.alerts = config.get('alerts', [])
         self.update_alerts_list()
@@ -507,8 +556,11 @@ class DSDApp(QMainWindow):
         if hasattr(self, 'recorder_dir_edit'): ui_settings['recorder_dir_edit'] = self.recorder_dir_edit.text()
         if hasattr(self, 'volume_slider'): ui_settings['volume_slider'] = self.volume_slider.value()
 
+        p1 = self.widgets.get('dsd_path1').text() if self.widgets.get('dsd_path1') else self.dsd_fme_path
+        p2 = self.widgets.get('dsd_path2').text() if self.widgets.get('dsd_path2') else self.dsd_fme_path2
         config = {
-            'dsd_fme_path': self.dsd_fme_path,
+            'dsd_fme_path': p1,
+            'dsd_fme_path2': p2,
             'current_theme': self.current_theme_name,
             'alerts': self.alerts,
             'ui_settings': ui_settings,
@@ -590,7 +642,18 @@ class DSDApp(QMainWindow):
         cmd_layout.addWidget(self.btn_reset, 4, 0, 1, 2)
         container_layout.addWidget(cmd_group)
         terminal_container = QWidget(); terminal_main_layout = QVBoxLayout(terminal_container)
-        self.live_analysis_group_config = self._create_live_analysis_group(self.live_labels_conf); terminal_main_layout.addWidget(self.live_analysis_group_config)
+        # two live analysis panels, one per port
+        self.live_analysis_groups_conf = [
+            self._create_live_analysis_group(self.live_labels_conf[0]),
+            self._create_live_analysis_group(self.live_labels_conf[1])
+        ]
+        for i, grp in enumerate(self.live_analysis_groups_conf, start=1):
+            grp.setTitle(f"Live Analysis - Port {i}")
+        self.live_analysis_splitter_conf = QSplitter(Qt.Horizontal)
+        for grp in self.live_analysis_groups_conf:
+            self.live_analysis_splitter_conf.addWidget(grp)
+        self.live_analysis_groups_conf[1].setVisible(False)
+        terminal_main_layout.addWidget(self.live_analysis_splitter_conf)
         terminal_group = self._create_terminal_group(); terminal_main_layout.addWidget(terminal_group)
         main_splitter.addWidget(scroll_area); main_splitter.addWidget(terminal_container)
         main_splitter.setSizes([450, 450])
@@ -628,12 +691,23 @@ class DSDApp(QMainWindow):
         visuals_layout = QHBoxLayout(visuals_widget)
         visuals_splitter = QSplitter(Qt.Horizontal)
 
+        spec_container = QWidget()
+        spec_layout = QVBoxLayout(spec_container)
+
         self.imv = pg.ImageView()
         self.imv.ui.roiBtn.hide()
         self.imv.ui.menuBtn.hide()
         self.imv.ui.histogram.hide()
         self.histogram.setImageItem(self.imv.imageItem)
-        visuals_splitter.addWidget(self.imv)
+        spec_layout.addWidget(self.imv)
+
+        self.spec_source_combo = QComboBox()
+        self.spec_source_combo.addItems(["Port 1", "Port 2"])
+        self.spec_source_combo.currentIndexChanged.connect(lambda _ : self.spec_data.fill(MIN_DB))
+        spec_layout.addWidget(QLabel("Spectrogram Source:"))
+        spec_layout.addWidget(self.spec_source_combo)
+
+        visuals_splitter.addWidget(spec_container)
 
         self.scope_widget = pg.PlotWidget(title="")
         self.scope_widget.getAxis('left').setWidth(50)
@@ -648,9 +722,19 @@ class DSDApp(QMainWindow):
 
         controls_and_stats_widget = QWidget()
         controls_and_stats_layout = QVBoxLayout(controls_and_stats_widget)
-        self.live_analysis_group_dash = self._create_live_analysis_group(self.live_labels_dash)
+        # dashboard live analysis panels per port
+        self.live_analysis_groups_dash = [
+            self._create_live_analysis_group(self.live_labels_dash[0]),
+            self._create_live_analysis_group(self.live_labels_dash[1])
+        ]
+        for i, grp in enumerate(self.live_analysis_groups_dash, start=1):
+            grp.setTitle(f"Live Analysis - Port {i}")
+        self.live_analysis_splitter_dash = QSplitter(Qt.Horizontal)
+        for grp in self.live_analysis_groups_dash:
+            self.live_analysis_splitter_dash.addWidget(grp)
+        self.live_analysis_groups_dash[1].setVisible(False)
+        controls_and_stats_layout.addWidget(self.live_analysis_splitter_dash)
         audio_controls_group_dash = self._create_audio_controls_group(is_dashboard=True)
-        controls_and_stats_layout.addWidget(self.live_analysis_group_dash)
         controls_and_stats_layout.addWidget(audio_controls_group_dash)
         controls_and_stats_layout.addStretch()
         bottom_area.addWidget(controls_and_stats_widget)
@@ -823,6 +907,21 @@ class DSDApp(QMainWindow):
 
     def _create_io_tab(self):
         tab = QWidget(); layout = QVBoxLayout(tab)
+
+        g_path = QGroupBox("DSD-FME Executable")
+        l_path = QGridLayout(g_path)
+        self._add_widget("dsd_path1", QLineEdit(self.dsd_fme_path or ""))
+        self._add_widget("dsd_path2", QLineEdit(self.dsd_fme_path2 or ""))
+        l_path.addWidget(QLabel("DSD-FME Path 1:"), 0, 0)
+        l_path.addWidget(self.widgets["dsd_path1"], 0, 1)
+        l_path.addWidget(self._create_browse_button(self.widgets["dsd_path1"]), 0, 2)
+        l_path.addWidget(QLabel("DSD-FME Path 2:"), 1, 0)
+        l_path.addWidget(self.widgets["dsd_path2"], 1, 1)
+        l_path.addWidget(self._create_browse_button(self.widgets["dsd_path2"]), 1, 2)
+        note = QLabel("Restart required after changing paths")
+        note.setStyleSheet("color:red")
+        l_path.addWidget(note, 2, 0, 1, 3)
+        layout.addWidget(g_path)
 
         g1 = QGroupBox("Input (-i)"); l1 = QGridLayout(g1)
         input_type_combo = self._add_widget("-i_type", QComboBox())
@@ -1002,35 +1101,46 @@ class DSDApp(QMainWindow):
         l1.addWidget(self._add_widget("-N", QCheckBox("Use NCurses Emulation [-N]")))
         l1.addWidget(self._add_widget("-Z", QCheckBox("Log Payloads to Console [-Z]")))
         g2 = QGroupBox("Encryption Keys"); l2 = QGridLayout(g2)
-        l2.addWidget(QLabel("Basic Privacy Key [-b]:"), 0, 0)
-        l2.addWidget(self._add_widget("-b_1", QLineEdit()), 0, 1)
-        l2.addWidget(self._add_widget("-b_2", QLineEdit()), 0, 3)
+        # header row to clarify which column corresponds to which port
+        l2.addWidget(QLabel(""), 0, 0)
+        l2.addWidget(QLabel("Port 1"), 0, 1, 1, 2)
+        l2.addWidget(QLabel("Port 2"), 0, 3, 1, 2)
 
-        l2.addWidget(QLabel("RC4 Key [-1]:"), 1, 0)
-        l2.addWidget(self._add_widget("-1_1", QLineEdit()), 1, 1)
-        l2.addWidget(self._add_widget("-1_2", QLineEdit()), 1, 3)
+        row = 1
+        l2.addWidget(QLabel("Basic Privacy Key [-b]:"), row, 0)
+        l2.addWidget(self._add_widget("-b_1", QLineEdit()), row, 1)
+        l2.addWidget(self._add_widget("-b_2", QLineEdit()), row, 3)
 
-        l2.addWidget(QLabel("Hytera BP Key [-H]:"), 2, 0)
-        l2.addWidget(self._add_widget("-H_1", QLineEdit()), 2, 1)
-        l2.addWidget(self._add_widget("-H_2", QLineEdit()), 2, 3)
+        row += 1
+        l2.addWidget(QLabel("RC4 Key [-1]:"), row, 0)
+        l2.addWidget(self._add_widget("-1_1", QLineEdit()), row, 1)
+        l2.addWidget(self._add_widget("-1_2", QLineEdit()), row, 3)
 
-        l2.addWidget(QLabel("dPMR/NXDN Scrambler [-R]:"), 3, 0)
-        l2.addWidget(self._add_widget("-R_1", QLineEdit()), 3, 1)
-        l2.addWidget(self._add_widget("-R_2", QLineEdit()), 3, 3)
+        row += 1
+        l2.addWidget(QLabel("Hytera BP Key [-H]:"), row, 0)
+        l2.addWidget(self._add_widget("-H_1", QLineEdit()), row, 1)
+        l2.addWidget(self._add_widget("-H_2", QLineEdit()), row, 3)
 
+        row += 1
+        l2.addWidget(QLabel("dPMR/NXDN Scrambler [-R]:"), row, 0)
+        l2.addWidget(self._add_widget("-R_1", QLineEdit()), row, 1)
+        l2.addWidget(self._add_widget("-R_2", QLineEdit()), row, 3)
+
+        row += 1
         self._add_widget("-K_1", QLineEdit()); self._add_widget("-K_2", QLineEdit())
         self._add_widget("-k_1", QLineEdit()); self._add_widget("-k_2", QLineEdit())
-        l2.addWidget(QLabel("Keys from .csv (Hex) [-K]:"), 4, 0)
+        l2.addWidget(QLabel("Keys from .csv (Hex) [-K]:"), row, 0)
         browse_K1 = self._create_browse_button(self.widgets["-K_1"])
         browse_K2 = self._create_browse_button(self.widgets["-K_2"])
-        l2.addWidget(self.widgets["-K_1"], 4, 1); l2.addWidget(browse_K1, 4, 2)
-        l2.addWidget(self.widgets["-K_2"], 4, 3); l2.addWidget(browse_K2, 4, 4)
+        l2.addWidget(self.widgets["-K_1"], row, 1); l2.addWidget(browse_K1, row, 2)
+        l2.addWidget(self.widgets["-K_2"], row, 3); l2.addWidget(browse_K2, row, 4)
 
-        l2.addWidget(QLabel("Keys from .csv (Dec) [-k]:"), 5, 0)
+        row += 1
+        l2.addWidget(QLabel("Keys from .csv (Dec) [-k]:"), row, 0)
         browse_k1 = self._create_browse_button(self.widgets["-k_1"])
         browse_k2 = self._create_browse_button(self.widgets["-k_2"])
-        l2.addWidget(self.widgets["-k_1"], 5, 1); l2.addWidget(browse_k1, 5, 2)
-        l2.addWidget(self.widgets["-k_2"], 5, 3); l2.addWidget(browse_k2, 5, 4)
+        l2.addWidget(self.widgets["-k_1"], row, 1); l2.addWidget(browse_k1, row, 2)
+        l2.addWidget(self.widgets["-k_2"], row, 3); l2.addWidget(browse_k2, row, 4)
 
         self.key_fields_port2 = [
             self.widgets["-b_2"],
@@ -1244,6 +1354,18 @@ class DSDApp(QMainWindow):
                 self.dashboard_terminal_splitter.setSizes([1, 1])
             else:
                 self.dashboard_terminal_splitter.setSizes([1, 0])
+        if hasattr(self, 'live_analysis_groups_conf'):
+            self.live_analysis_groups_conf[1].setVisible(enabled)
+            if enabled:
+                self.live_analysis_splitter_conf.setSizes([1, 1])
+            else:
+                self.live_analysis_splitter_conf.setSizes([1, 0])
+        if hasattr(self, 'live_analysis_groups_dash'):
+            self.live_analysis_groups_dash[1].setVisible(enabled)
+            if enabled:
+                self.live_analysis_splitter_dash.setSizes([1, 1])
+            else:
+                self.live_analysis_splitter_dash.setSizes([1, 0])
         if hasattr(self, 'key_fields_port2'):
             for w in self.key_fields_port2:
                 w.setVisible(enabled)
@@ -1265,11 +1387,8 @@ class DSDApp(QMainWindow):
         path = QFileDialog.getExistingDirectory(self, "Select Directory") if is_dir else QFileDialog.getOpenFileName(self, "Select File")[0]
         if path: line_edit_widget.setText(path)
 
-    def start_udp_listeners(self):
-        ports = [UDP_PORT]
-        if (self.widgets.get('dual_tcp') and self.widgets['dual_tcp'].isChecked() and
-                self.widgets.get('-i_type') and self.widgets['-i_type'].currentText() == 'tcp'):
-            ports.append(UDP_PORT + 1)
+    def start_udp_listeners(self, count):
+        ports = [UDP_PORT + i for i in range(count)]
         for idx, port in enumerate(ports, start=1):
             thread = QThread()
             listener = UdpListener(UDP_IP, port, idx)
@@ -1279,6 +1398,12 @@ class DSDApp(QMainWindow):
             thread.start()
             self.udp_listener_threads.append(thread)
             self.udp_listeners.append(listener)
+            # log which UDP port is used for which channel
+            msg = f"Listening on UDP {port} (Port {idx})"
+            if idx - 1 < len(self.terminal_outputs_conf):
+                self.terminal_outputs_conf[idx - 1].appendPlainText(msg)
+            if idx - 1 < len(self.terminal_outputs_dash):
+                self.terminal_outputs_dash[idx - 1].appendPlainText(msg)
 
     def stop_udp_listeners(self):
         for listener in self.udp_listeners:
@@ -1294,12 +1419,23 @@ class DSDApp(QMainWindow):
 
         in_type = self.widgets["-i_type"].currentText()
         dual = self.widgets.get('dual_tcp') and self.widgets['dual_tcp'].isChecked() and in_type == 'tcp'
+        if dual and not self.dsd_fme_path2:
+            QMessageBox.warning(self, "Dual Mode Disabled", "Second DSD-FME path not set. Only Port 1 will run.")
+            self.widgets['dual_tcp'].setChecked(False)
+            dual = False
 
         inputs = []
         if in_type == 'tcp':
-            inputs.append(self.widgets['-i_tcp'].text())
+            primary = self.widgets['-i_tcp'].text().strip()
+            inputs.append(primary)
             if dual:
-                inputs.append(self.widgets['-i_tcp2'].text())
+                secondary = self.widgets['-i_tcp2'].text().strip()
+                if not secondary:
+                    QMessageBox.warning(self, "Dual TCP Disabled", "Second TCP address is empty. Only one channel will run.")
+                    self.widgets['dual_tcp'].setChecked(False)
+                    dual = False
+                else:
+                    inputs.append(secondary)
         else:
             inputs.append(None)
 
@@ -1332,8 +1468,10 @@ class DSDApp(QMainWindow):
 
         commands = []
         for idx, tcp_addr in enumerate(inputs):
-            cmd = [self.dsd_fme_path, "-o", f"udp:{UDP_IP}:{UDP_PORT + idx}"]
+            binary = self.dsd_fme_path2 if idx == 1 and dual and self.dsd_fme_path2 else self.dsd_fme_path
+            cmd = [binary, "-o", f"udp:{UDP_IP}:{UDP_PORT + idx}"]
             if in_type == 'tcp':
+                # Each command uses a distinct TCP input and UDP output
                 cmd.extend(["-i", f"tcp:{tcp_addr}" if tcp_addr else "tcp"])
             elif in_type == 'wav':
                 if self.widgets['-i_wav'].text():
@@ -1386,8 +1524,11 @@ class DSDApp(QMainWindow):
         self.create_initial_map()
         self.logbook_table.setRowCount(0)
         self.mini_logbook_table.setRowCount(0)
-        self.is_in_transmission = False
-        self.last_logged_id = None
+        self.is_in_transmission = [False, False]
+        self.last_logged_id = [None, None]
+        self.current_tg = [None, None]
+        self.current_id = [None, None]
+        self.current_cc = [None, None]
         self.transmission_log.clear()
 
         commands = self.build_command()
@@ -1401,7 +1542,7 @@ class DSDApp(QMainWindow):
             self.lrrp_watcher.addPath(lrrp_file_path)
 
         self.restart_audio_stream()
-        self.start_udp_listeners()
+        self.start_udp_listeners(len(commands))
         for idx, cmd in enumerate(commands):
             log_start_msg = f"$ {subprocess.list2cmdline(cmd)}\n\n"
             if idx < len(self.terminal_outputs_conf):
@@ -1499,7 +1640,7 @@ class DSDApp(QMainWindow):
 
     def update_terminal_log(self, idx, text):
         try:
-            self.parse_and_display_log(text)
+            self.parse_and_display_log(idx, text)
             targets = []
             if idx < len(self.terminal_outputs_conf):
                 targets.append(self.terminal_outputs_conf[idx])
@@ -1511,35 +1652,60 @@ class DSDApp(QMainWindow):
         except RuntimeError as e:
             print(f"RuntimeError in update_terminal_log: {e}")
 
-    def parse_and_display_log(self, text):
+    def parse_and_display_log(self, idx, text):
         try:
+            panels = []
+            if idx < len(self.live_labels_conf):
+                panels.append(self.live_labels_conf[idx])
+            if idx < len(self.live_labels_dash):
+                panels.append(self.live_labels_dash[idx])
             if "TGT=" in text and "SRC=" in text:
-                self.current_tg = text.split("TGT=")[1].split(" ")[0].strip(); self.current_id = text.split("SRC=")[1].split(" ")[0].strip()
-                for panel in [self.live_labels_conf, self.live_labels_dash]: panel and (panel['tg'].setText(self.aliases['tg'].get(self.current_tg, self.current_tg)), panel['id'].setText(self.aliases['id'].get(self.current_id, self.current_id)))
+                self.current_tg[idx] = text.split("TGT=")[1].split(" ")[0].strip()
+                self.current_id[idx] = text.split("SRC=")[1].split(" ")[0].strip()
+                for panel in panels:
+                    panel['tg'].setText(self.aliases['tg'].get(self.current_tg[idx], self.current_tg[idx]))
+                    panel['id'].setText(self.aliases['id'].get(self.current_id[idx], self.current_id[idx]))
                 return
             if "Sync:" in text:
                 if "Color Code=" in text:
-                    self.current_cc = text.split("Color Code=")[1].split(" ")[0].strip()
-                    for panel in [self.live_labels_conf, self.live_labels_dash]: panel and panel['cc'].setText(self.current_cc)
+                    self.current_cc[idx] = text.split("Color Code=")[1].split(" ")[0].strip()
+                    for panel in panels:
+                        panel['cc'].setText(self.current_cc[idx])
                 is_voice = "VC" in text or "VLC" in text
                 timestamp = text[:8] if (len(text) > 8 and text[2] == ':') else None
                 if is_voice:
-                    self.is_in_transmission = True
-                    for panel in [self.live_labels_conf, self.live_labels_dash]:
-                        if panel: panel['status'].setText("VOICE CALL"); panel['duration'].setText("In Progress..."); timestamp and panel['last_voice'].setText(timestamp)
-                    if self.current_id and self.current_id != self.last_logged_id:
-                        self.end_all_transmissions(end_current=False); self.start_new_log_entry(self.current_id, self.current_tg, self.current_cc)
-                        self.last_logged_id = self.current_id
-                        if self.recorder_enabled_check.isChecked(): self.is_recording and self.stop_internal_recording(); self.start_internal_recording(self.current_id)
-                        self.check_for_alerts(self.current_tg, self.current_id)
-                elif not self.is_in_transmission:
-                     for panel in [self.live_labels_conf, self.live_labels_dash]: panel and (panel['status'].setText(text.strip().replace("Sync: ", "")), timestamp and panel['last_sync'].setText(timestamp))
-            if "Sync: no sync" in text and self.is_in_transmission:
-                self.is_in_transmission = False; self.end_all_transmissions()
-                for panel in [self.live_labels_conf, self.live_labels_dash]: panel and panel['status'].setText("No Sync")
-                if self.is_recording: self.stop_internal_recording()
-                self.current_id = None; self.current_tg = None; self.last_logged_id = None
-        except Exception as e: print(f"Log parse error: {e}")
+                    self.is_in_transmission[idx] = True
+                    for panel in panels:
+                        panel['status'].setText("VOICE CALL")
+                        panel['duration'].setText("In Progress...")
+                        if timestamp:
+                            panel['last_voice'].setText(timestamp)
+                    if self.current_id[idx] and self.current_id[idx] != self.last_logged_id[idx]:
+                        self.end_all_transmissions(end_current=False)
+                        self.start_new_log_entry(self.current_id[idx], self.current_tg[idx], self.current_cc[idx])
+                        self.last_logged_id[idx] = self.current_id[idx]
+                        if self.recorder_enabled_check.isChecked():
+                            if self.is_recording:
+                                self.stop_internal_recording()
+                            self.start_internal_recording(self.current_id[idx])
+                        self.check_for_alerts(self.current_tg[idx], self.current_id[idx])
+                elif not self.is_in_transmission[idx]:
+                    for panel in panels:
+                        panel['status'].setText(text.strip().replace("Sync: ", ""))
+                        if timestamp:
+                            panel['last_sync'].setText(timestamp)
+            if "Sync: no sync" in text and self.is_in_transmission[idx]:
+                self.is_in_transmission[idx] = False
+                self.end_all_transmissions()
+                for panel in panels:
+                    panel['status'].setText("No Sync")
+                if self.is_recording:
+                    self.stop_internal_recording()
+                self.current_id[idx] = None
+                self.current_tg[idx] = None
+                self.last_logged_id[idx] = None
+        except Exception as e:
+            print(f"Log parse error: {e}")
 
     def start_new_log_entry(self, id_val, tg_val, cc_val):
         start_time = datetime.now()
@@ -1578,7 +1744,8 @@ class DSDApp(QMainWindow):
 
         for log_data in self.transmission_log.values():
             duration = end_time - log_data['start_time']; duration_str = str(duration).split('.')[0]
-            for panel in [self.live_labels_conf, self.live_labels_dash]: panel and panel['duration'].setText(duration_str)
+            for panel in self.live_labels_conf + self.live_labels_dash:
+                panel and panel['duration'].setText(duration_str)
             for r in range(self.logbook_table.rowCount()):
                 if self.logbook_table.item(r,4) and self.logbook_table.item(r,4).text() == log_data['id_alias'] and (not self.logbook_table.item(r,1) or not self.logbook_table.item(r,1).text()):
                     end_item = QTableWidgetItem(end_time_str)
@@ -1594,7 +1761,10 @@ class DSDApp(QMainWindow):
                     self.mini_logbook_table.setItem(r,1,QTableWidgetItem(end_time_str.split(" ")[1]))
                     self.mini_logbook_table.setItem(r,2,QTableWidgetItem(duration_str))
                     break
-        if end_current: self.transmission_log.clear(); self.last_logged_id = None; hasattr(self, 'scope_curve') and self.scope_curve.setData([])
+        if end_current:
+            self.transmission_log.clear()
+            self.last_logged_id = [None, None]
+            hasattr(self, 'scope_curve') and self.scope_curve.setData([])
 
     def start_internal_recording(self, id_):
         rec_dir = self.recorder_dir_edit.text();_id=id_.replace('/','-')
@@ -1602,7 +1772,8 @@ class DSDApp(QMainWindow):
         filepath = os.path.join(rec_dir, datetime.now().strftime("%Y-%m-%d_%H%M%S") + f"_ID_{_id}.wav")
         try:
             self.wav_file = wave.open(filepath, 'wb'); self.wav_file.setnchannels(WAV_CHANNELS); self.wav_file.setsampwidth(WAV_SAMPWIDTH); self.wav_file.setframerate(AUDIO_RATE); self.is_recording = True
-            for panel in [self.live_labels_conf, self.live_labels_dash]: panel and (panel['recording'].setText("ACTIVE"), panel['recording'].setStyleSheet("color: #ffaa00; font-weight: bold;"))
+            for panel in self.live_labels_conf + self.live_labels_dash:
+                panel and (panel['recording'].setText("ACTIVE"), panel['recording'].setStyleSheet("color: #ffaa00; font-weight: bold;"))
         except Exception as e: print(f"Error starting recording: {e}"); self.wav_file = None; self.is_recording = False
 
     def stop_internal_recording(self):
@@ -1610,13 +1781,21 @@ class DSDApp(QMainWindow):
             try: self.wav_file.close()
             except Exception as e: print(f"Error closing wav file: {e}")
         self.wav_file = None; self.is_recording = False
-        for panel in [self.live_labels_conf, self.live_labels_dash]: panel and (panel['recording'].setText("INACTIVE"), panel['recording'].setStyleSheet("color: gray;"))
+        for panel in self.live_labels_conf + self.live_labels_dash:
+            panel and (panel['recording'].setText("INACTIVE"), panel['recording'].setStyleSheet("color: gray;"))
 
     def process_audio_data(self, channel, raw_data):
         if raw_data.startswith(b"ERROR:"):
             QMessageBox.critical(self, "UDP Error", raw_data.decode())
             self.close()
             return
+
+        # Debug: show incoming byte counts in GUI terminals
+        msg = f"Channel {channel} received {len(raw_data)} bytes"
+        if channel - 1 < len(self.terminal_outputs_conf):
+            self.terminal_outputs_conf[channel - 1].appendPlainText(msg)
+        if channel - 1 < len(self.terminal_outputs_dash):
+            self.terminal_outputs_dash[channel - 1].appendPlainText(msg)
 
         clean_num_bytes = (len(raw_data) // np.dtype(AUDIO_DTYPE).itemsize) * np.dtype(AUDIO_DTYPE).itemsize
         if clean_num_bytes == 0:
@@ -1648,7 +1827,10 @@ class DSDApp(QMainWindow):
             if len(self.channel_buffers[ch]) > 0 and len(self.channel_buffers[other]) == 0:
                 data = self.channel_buffers[ch]
                 self.channel_buffers[ch] = np.array([], dtype=AUDIO_DTYPE)
-                frames.append(np.column_stack((data, data)))
+                if ch == 1:
+                    frames.append(np.column_stack((data, np.zeros_like(data))))
+                else:
+                    frames.append(np.column_stack((np.zeros_like(data), data)))
 
         if self.is_recording and self.wav_file:
             for frame in frames:
@@ -1661,29 +1843,31 @@ class DSDApp(QMainWindow):
                 except Exception:
                     pass
 
-        if hasattr(self, 'scope_curve'):
-            self.scope_curve.setData(audio_samples)
+        show_visuals = not hasattr(self, 'spec_source_combo') or self.spec_source_combo.currentIndex() + 1 == channel
+        if show_visuals:
+            if hasattr(self, 'scope_curve'):
+                self.scope_curve.setData(audio_samples)
 
-        audio_samples_float = audio_samples.astype(np.float32) / 32768.0
+            audio_samples_float = audio_samples.astype(np.float32) / 32768.0
 
-        if hasattr(self, 'rms_label'):
-            self.rms_label.setText(f"RMS: {np.sqrt(np.mean(audio_samples_float**2)):.4f}")
+            if hasattr(self, 'rms_label'):
+                self.rms_label.setText(f"RMS: {np.sqrt(np.mean(audio_samples_float**2)):.4f}")
 
-        if len(audio_samples_float) < CHUNK_SAMPLES:
-            audio_samples_float = np.pad(audio_samples_float, (0, CHUNK_SAMPLES - len(audio_samples_float)))
+            if len(audio_samples_float) < CHUNK_SAMPLES:
+                audio_samples_float = np.pad(audio_samples_float, (0, CHUNK_SAMPLES - len(audio_samples_float)))
 
-        with np.errstate(divide='ignore', invalid='ignore'):
-            magnitude = np.abs(np.fft.fft(audio_samples_float)[:CHUNK_SAMPLES // 2])
-            log_magnitude = 20 * np.log10(magnitude + 1e-12)
-        log_magnitude = np.nan_to_num(log_magnitude, nan=MIN_DB, posinf=MAX_DB, neginf=MIN_DB)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                magnitude = np.abs(np.fft.fft(audio_samples_float)[:CHUNK_SAMPLES // 2])
+                log_magnitude = 20 * np.log10(magnitude + 1e-12)
+            log_magnitude = np.nan_to_num(log_magnitude, nan=MIN_DB, posinf=MAX_DB, neginf=MIN_DB)
 
-        if hasattr(self, 'peak_freq_label'):
-            self.peak_freq_label.setText(f"Peak: {np.argmax(log_magnitude) * (AUDIO_RATE / CHUNK_SAMPLES):.0f} Hz")
+            if hasattr(self, 'peak_freq_label'):
+                self.peak_freq_label.setText(f"Peak: {np.argmax(log_magnitude) * (AUDIO_RATE / CHUNK_SAMPLES):.0f} Hz")
 
-        if hasattr(self, 'spec_data') and hasattr(self, 'imv'):
-            self.spec_data = np.roll(self.spec_data, -1, axis=0)
-            self.spec_data[-1, :] = log_magnitude
-            self.imv.setImage(np.rot90(self.spec_data), autoLevels=False, levels=(MIN_DB, MAX_DB))
+            if hasattr(self, 'spec_data') and hasattr(self, 'imv'):
+                self.spec_data = np.roll(self.spec_data, -1, axis=0)
+                self.spec_data[-1, :] = log_magnitude
+                self.imv.setImage(np.rot90(self.spec_data), autoLevels=False, levels=(MIN_DB, MAX_DB))
 
     def search_in_log(self):
         term = self.terminal_outputs_conf[0]
@@ -2121,6 +2305,8 @@ if __name__ == '__main__':
     if hasattr(Qt, 'AA_UseHighDpiPixmaps'): QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
     app = QApplication(sys.argv)
+    if not run_selftest():
+        sys.exit(1)
 
     main_window = DSDApp()
 
