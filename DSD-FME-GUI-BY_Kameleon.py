@@ -1156,10 +1156,8 @@ class DSDApp(QMainWindow):
         l_rtl.addWidget(QLabel("Squelch Level:"), 5, 0); l_rtl.addWidget(self.widgets["rtl_sq"], 5, 1)
         l_rtl.addWidget(QLabel("Sample Volume:"), 6, 0); l_rtl.addWidget(self.widgets["rtl_vol"], 6, 1)
         layout.addWidget(self.rtl_group)
-        # hide manual device selection; dsd-fme will pick first RTL automatically
-        self.rtl_dev_label.hide()
-        self.widgets["rtl_dev"].hide()
-        self.rtl_refresh_btn.hide()
+        # allow manual device selection when using RTL-SDR input
+        self._populate_rtl_devices()
 
         def toggle_input_options(text):
             is_rtl = (text == 'rtl')
@@ -1707,31 +1705,38 @@ class DSDApp(QMainWindow):
                     QMessageBox.critical(self, "Error", "No audio input device selected.")
                     return []
             elif in_type == 'rtl':
-                try:
-                    freq_val = float(self.widgets["rtl_freq"].text())
-                    unit = self.widgets["rtl_unit"].currentText()
-                    gain = self.widgets["rtl_gain"].text()
-                    ppm = self.widgets["rtl_ppm"].text()
-                    bw = self.widgets["rtl_bw"].currentText()
-                    sq = self.widgets["rtl_sq"].text()
-                    vol = self.widgets["rtl_vol"].text()
-                    freq_map = {"MHz": "M", "KHz": "K", "GHz": "G", "Hz": ""}
-                    freq_str = f"{freq_val}{freq_map.get(unit, '')}"
-                    rtl_params = [freq_str, gain, ppm, bw, sq, vol]
-                    dev_index = self.widgets["rtl_dev"].currentData()
-                    if dev_index is None:
-                        dev_index = 0
-                    rtl_params.insert(0, str(dev_index))
-                    if dev_index is None:
-                        dev_index = 0
-                    rtl_params.insert(0, str(dev_index))
+                params = []
+                dev_index = self.widgets["rtl_dev"].currentData()
+                params.append(str(dev_index) if dev_index is not None else "")
 
-                    if dev_index is not None:
-                        rtl_params.insert(0, str(dev_index))
-                    cmd.extend(["-i", f"rtl:{':'.join(p for p in rtl_params if p)}"])
-                except ValueError:
-                    QMessageBox.critical(self, "Error", "Invalid frequency value.")
-                    return []
+                freq_text = self.widgets["rtl_freq"].text().strip()
+                if freq_text:
+                    try:
+                        freq_val = float(freq_text)
+                    except ValueError:
+                        QMessageBox.critical(self, "Error", "Invalid frequency value.")
+                        return []
+                    unit = self.widgets["rtl_unit"].currentText()
+                    freq_map = {"MHz": "M", "KHz": "K", "GHz": "G", "Hz": ""}
+                    params.append(f"{freq_val}{freq_map.get(unit, '')}")
+                else:
+                    params.append("")
+
+                params.extend([
+                    self.widgets["rtl_gain"].text().strip(),
+                    self.widgets["rtl_ppm"].text().strip(),
+                    self.widgets["rtl_bw"].currentText().strip(),
+                    self.widgets["rtl_sq"].text().strip(),
+                    self.widgets["rtl_vol"].text().strip(),
+                ])
+
+                while params and params[-1] == "":
+                    params.pop()
+
+                if any(params):
+                    cmd.extend(["-i", f"rtl:{':'.join(params)}"])
+                else:
+                    cmd.extend(["-i", "rtl"])
             else:
                 cmd.extend(["-i", in_type])
 
