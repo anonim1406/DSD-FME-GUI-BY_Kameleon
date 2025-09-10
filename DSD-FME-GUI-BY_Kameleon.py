@@ -323,7 +323,7 @@ class DSDApp(QMainWindow):
             "Night Vision": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,20,0),(0,180,80),(100,255,150)]), "Arctic Blue": pg.ColorMap(pos=np.linspace(0.0,1.0,3),color=[(0,0,0),(0,0,150),(100,180,255)])
         }
 
-        self.dsd_fme_path = self._load_config_or_prompt()
+        self.dsd_fme_path, self.dsd_fme_path2 = self._load_config_or_prompt()
         if self.dsd_fme_path:
             self._init_ui()
             self.audio_lab_window = AudioProcessingWindow(self)
@@ -450,28 +450,49 @@ class DSDApp(QMainWindow):
         if os.path.exists(target_config_file):
             try:
                 with open(target_config_file, 'r') as f: config = json.load(f)
-            except json.JSONDecodeError: pass
+            except json.JSONDecodeError:
+                pass
 
         self.current_theme_name = config.get('current_theme', "Default (Kameleon Dark)")
 
-        path = config.get('dsd_fme_path')
-        if path and os.path.exists(path): return path
+        p1 = config.get('dsd_fme_path')
+        p2 = config.get('dsd_fme_path2')
+        if p1 and os.path.exists(p1):
+            if p2 and not os.path.exists(p2):
+                p2 = None
+            return p1, p2
 
         local_dsd_path = os.path.join(os.path.abspath("."), 'dsd-fme.exe')
         if os.path.exists(local_dsd_path):
-            path = local_dsd_path
-            config_to_save = {'dsd_fme_path': path, 'current_theme': self.current_theme_name}
-            with open(CONFIG_FILE, 'w') as f: json.dump(config_to_save, f, indent=4)
-            return path
+            p1 = local_dsd_path
+            config_to_save = {'dsd_fme_path': p1, 'dsd_fme_path2': p2, 'current_theme': self.current_theme_name}
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(config_to_save, f, indent=4)
+            return p1, p2
 
         QMessageBox.information(self, "Setup", "Please locate your 'dsd-fme.exe' file.")
-        path, _ = QFileDialog.getOpenFileName(self, "Select dsd-fme.exe", "", "Executable Files (dsd-fme.exe dsd-fme)")
-        if path and ("dsd-fme" in os.path.basename(path).lower()):
-            config_to_save = {'dsd_fme_path': path, 'current_theme': self.current_theme_name}
-            with open(CONFIG_FILE, 'w') as f: json.dump(config_to_save, f, indent=4)
-            return path
+        p1, _ = QFileDialog.getOpenFileName(self, "Select dsd-fme.exe", "", "Executable Files (dsd-fme.exe dsd-fme)")
+        if p1 and ("dsd-fme" in os.path.basename(p1).lower()):
+            reply = QMessageBox.question(
+                self,
+                "Dual Mode",
+                "Dual mode requires a second copy of dsd-fme.\nDo you want to locate it now?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes
+            )
+            if reply == QMessageBox.Yes:
+                p2, _ = QFileDialog.getOpenFileName(self, "Select second dsd-fme.exe", "", "Executable Files (dsd-fme.exe dsd-fme)")
+                if not (p2 and os.path.exists(p2)):
+                    p2 = None
+            else:
+                QMessageBox.information(self, "Dual Mode Disabled", "Dual mode will be unavailable until a second path is set.")
+            config_to_save = {'dsd_fme_path': p1, 'dsd_fme_path2': p2, 'current_theme': self.current_theme_name}
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(config_to_save, f, indent=4)
+            return p1, p2
         else:
-            QMessageBox.critical(self, "Error", "DSD-FME not selected. The application cannot function without it."); return None
+            QMessageBox.critical(self, "Error", "DSD-FME not selected. The application cannot function without it.")
+            return None, None
 
     def _load_app_config(self):
         config = {}
@@ -483,6 +504,11 @@ class DSDApp(QMainWindow):
         self.current_theme_name = config.get('current_theme', "Default (Kameleon Dark)")
         if hasattr(self, 'theme_combo'): self.theme_combo.setCurrentText(self.current_theme_name)
         self.apply_theme(self.current_theme_name)
+
+        self.dsd_fme_path = config.get('dsd_fme_path', self.dsd_fme_path)
+        self.dsd_fme_path2 = config.get('dsd_fme_path2', self.dsd_fme_path2)
+        if 'dsd_path1' in self.widgets: self.widgets['dsd_path1'].setText(self.dsd_fme_path or '')
+        if 'dsd_path2' in self.widgets: self.widgets['dsd_path2'].setText(self.dsd_fme_path2 or '')
 
         self.alerts = config.get('alerts', [])
         self.update_alerts_list()
@@ -530,8 +556,11 @@ class DSDApp(QMainWindow):
         if hasattr(self, 'recorder_dir_edit'): ui_settings['recorder_dir_edit'] = self.recorder_dir_edit.text()
         if hasattr(self, 'volume_slider'): ui_settings['volume_slider'] = self.volume_slider.value()
 
+        p1 = self.widgets.get('dsd_path1').text() if self.widgets.get('dsd_path1') else self.dsd_fme_path
+        p2 = self.widgets.get('dsd_path2').text() if self.widgets.get('dsd_path2') else self.dsd_fme_path2
         config = {
-            'dsd_fme_path': self.dsd_fme_path,
+            'dsd_fme_path': p1,
+            'dsd_fme_path2': p2,
             'current_theme': self.current_theme_name,
             'alerts': self.alerts,
             'ui_settings': ui_settings,
@@ -881,6 +910,21 @@ class DSDApp(QMainWindow):
 
     def _create_io_tab(self):
         tab = QWidget(); layout = QVBoxLayout(tab)
+
+        g_path = QGroupBox("DSD-FME Executable")
+        l_path = QGridLayout(g_path)
+        self._add_widget("dsd_path1", QLineEdit(self.dsd_fme_path or ""))
+        self._add_widget("dsd_path2", QLineEdit(self.dsd_fme_path2 or ""))
+        l_path.addWidget(QLabel("DSD-FME Path 1:"), 0, 0)
+        l_path.addWidget(self.widgets["dsd_path1"], 0, 1)
+        l_path.addWidget(self._create_browse_button(self.widgets["dsd_path1"]), 0, 2)
+        l_path.addWidget(QLabel("DSD-FME Path 2:"), 1, 0)
+        l_path.addWidget(self.widgets["dsd_path2"], 1, 1)
+        l_path.addWidget(self._create_browse_button(self.widgets["dsd_path2"]), 1, 2)
+        note = QLabel("Restart required after changing paths")
+        note.setStyleSheet("color:red")
+        l_path.addWidget(note, 2, 0, 1, 3)
+        layout.addWidget(g_path)
 
         g1 = QGroupBox("Input (-i)"); l1 = QGridLayout(g1)
         input_type_combo = self._add_widget("-i_type", QComboBox())
@@ -1383,6 +1427,10 @@ class DSDApp(QMainWindow):
 
         in_type = self.widgets["-i_type"].currentText()
         dual = self.widgets.get('dual_tcp') and self.widgets['dual_tcp'].isChecked() and in_type == 'tcp'
+        if dual and not self.dsd_fme_path2:
+            QMessageBox.warning(self, "Dual Mode Disabled", "Second DSD-FME path not set. Only Port 1 will run.")
+            self.widgets['dual_tcp'].setChecked(False)
+            dual = False
 
         inputs = []
         if in_type == 'tcp':
@@ -1428,7 +1476,8 @@ class DSDApp(QMainWindow):
 
         commands = []
         for idx, tcp_addr in enumerate(inputs):
-            cmd = [self.dsd_fme_path, "-o", f"udp:{UDP_IP}:{UDP_PORT + idx}"]
+            binary = self.dsd_fme_path2 if idx == 1 and dual and self.dsd_fme_path2 else self.dsd_fme_path
+            cmd = [binary, "-o", f"udp:{UDP_IP}:{UDP_PORT + idx}"]
             if in_type == 'tcp':
                 # Each command uses a distinct TCP input and UDP output
                 cmd.extend(["-i", f"tcp:{tcp_addr}" if tcp_addr else "tcp"])
