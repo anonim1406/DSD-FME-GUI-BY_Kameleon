@@ -948,6 +948,11 @@ class DSDApp(QMainWindow):
 
         return widget
     def create_initial_map(self):
+        assets_dir = os.path.join(os.path.abspath("."), "assets", "leaflet")
+        tiles_dir = os.path.join(os.path.abspath("."), "tiles")
+        leaflet_css = QUrl.fromLocalFile(os.path.join(assets_dir, "leaflet.css")).toString()
+        leaflet_js = QUrl.fromLocalFile(os.path.join(assets_dir, "leaflet.js")).toString()
+        tiles_url = QUrl.fromLocalFile(os.path.join(tiles_dir, "")).toString()
         html = f"""
             <!DOCTYPE html>
             <html>
@@ -956,16 +961,22 @@ class DSDApp(QMainWindow):
                 <meta charset=\"utf-8\" />
                 <style>
                     html, body, #map {{ height: 100%; margin: 0; }}
-                </style>
+                </style> codex/fix-keyerror-for-map_layout-jc6dli
+                <link rel=\"stylesheet\" href=\"{leaflet_css}\" />
+                <script src=\"{leaflet_js}\"></script>
                 <link rel=\"stylesheet\" href=\"assets/leaflet/leaflet.css\" />
                 <script src=\"assets/leaflet/leaflet.js\"></script>
+main
             </head>
             <body>
             <div id='map'></div>
             <script>
                 var map = L.map('map', {{minZoom:0, maxZoom:2}}).setView([0,0], 1);
                 var markers = L.layerGroup().addTo(map);
+                codex/fix-keyerror-for-map_layout-jc6dli
+                L.tileLayer('{tiles_url}{{z}}/{{x}}/{{y}}.png', {{noWrap:true, minZoom:0, maxZoom:2, attribution:''}}).addTo(map);
                 L.tileLayer('tiles/{{z}}/{{x}}/{{y}}.png', {{noWrap:true, minZoom:0, maxZoom:2, attribution:''}}).addTo(map);
+main
                 map.on('click', function(e) {{
                     L.marker(e.latlng, {{draggable:true}}).addTo(markers);
                 }});
@@ -1205,24 +1216,33 @@ class DSDApp(QMainWindow):
 
     def _populate_rtl_devices(self):
         combo = self.widgets.get("rtl_dev")
-        if not combo: return
+        if not combo:
+            return
         combo.clear()
+        combo.setEditable(True)
         if not RTLSDR_AVAILABLE:
-            combo.addItem("pyrtlsdr not found!")
-            combo.setEnabled(False)
+            for i in range(2):
+                combo.addItem(f"#{i}", userData=i)
+            combo.setToolTip("pyrtlsdr not installed; enter device index manually")
             self.rtl_refresh_btn.setEnabled(False)
             return
         try:
             devices = RtlSdr.get_device_serial_addresses()
-            if not devices:
-                combo.addItem("No RTL-SDR devices found.")
-                return
-            for i, serial in enumerate(devices):
-                combo.addItem(f"#{i}: {serial}", userData=i)
+            if devices:
+                for i, serial in enumerate(devices):
+                    combo.addItem(f"#{i}: {serial}", userData=i)
+            else:
+                count = RtlSdr.get_device_count()
+                if count == 0:
+                    combo.addItem("No RTL-SDR devices found.")
+                else:
+                    for i in range(count):
+                        combo.addItem(f"#{i}", userData=i)
         except Exception as e:
-            combo.addItem("Error querying devices")
             print(f"Error enumerating RTL-SDR devices: {e}")
-            QMessageBox.critical(self, "RTL-SDR Error", f"Could not list RTL-SDR devices.\nMake sure drivers (e.g., Zadig) are correctly installed and libusb is accessible.\n\nError: {e}")
+            for i in range(2):
+                combo.addItem(f"#{i}", userData=i)
+            QMessageBox.warning(self, "RTL-SDR", "Could not list devices. Enter index manually.")
 
     def _populate_audio_input_devices(self):
         combo = self.widgets.get("audio_in_dev")
