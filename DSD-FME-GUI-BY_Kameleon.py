@@ -961,11 +961,34 @@ class DSDApp(QMainWindow):
                 <meta charset=\"utf-8\" />
                 <style>
                     html, body, #map {{ height: 100%; margin: 0; }}
+codex/fix-keyerror-for-map_layout-6zslwz
+                </style>
+                <link rel=\"stylesheet\" href=\"{leaflet_css}\" />
+                <script>
+                    function __initMap() {{
+                        var map = L.map('map', {{minZoom:0, maxZoom:2}}).setView([0,0], 1);
+                        var markers = L.layerGroup().addTo(map);
+                        L.tileLayer('{tiles_url}{{z}}/{{x}}/{{y}}.png', {{noWrap:true, minZoom:0, maxZoom:2, attribution:''}}).addTo(map);
+                        map.on('click', function(e) {{
+                            L.marker(e.latlng, {{draggable:true}}).addTo(markers);
+                        }});
+                        window.getMarkers = function() {{ return markers.getLayers().map(m => m.getLatLng()); }};
+                        window.setMarkers = function(data) {{
+                            markers.clearLayers();
+                            data.forEach(d => L.marker(d, {{draggable:true}}).addTo(markers));
+                        }};
+                    }}
+                    function __loadLeafletModule() {{
+                        import('{leaflet_js}').then(m => {{ window.L = m; __initMap(); }});
+                    }}
+                </script>
+                <script src=\"{leaflet_js}\" onload=\"__initMap()\" onerror=\"__loadLeafletModule()\"></script>
                 </style> codex/fix-keyerror-for-map_layout-jc6dli
                 <link rel=\"stylesheet\" href=\"{leaflet_css}\" />
                 <script src=\"{leaflet_js}\"></script>
                 <link rel=\"stylesheet\" href=\"assets/leaflet/leaflet.css\" />
                 <script src=\"assets/leaflet/leaflet.js\"></script>
+main
 main
             </head>
             <body>
@@ -1154,14 +1177,18 @@ main
         self._add_widget("rtl_gain", QLineEdit("0")); self._add_widget("rtl_ppm", QLineEdit("0"))
         self._add_widget("rtl_bw", QComboBox()); self.widgets["rtl_bw"].addItems(["12", "4", "6", "8", "16", "24"])
         self._add_widget("rtl_sq", QLineEdit("0")); self._add_widget("rtl_vol", QLineEdit("2"))
-        l_rtl.addWidget(QLabel("Device:"), 0, 0); l_rtl.addWidget(self.widgets["rtl_dev"], 0, 1); l_rtl.addWidget(self.rtl_refresh_btn, 0, 2)
+        self.rtl_dev_label = QLabel("Device:")
+        l_rtl.addWidget(self.rtl_dev_label, 0, 0); l_rtl.addWidget(self.widgets["rtl_dev"], 0, 1); l_rtl.addWidget(self.rtl_refresh_btn, 0, 2)
         l_rtl.addWidget(QLabel("Frequency:"), 1, 0); l_rtl.addWidget(self.widgets["rtl_freq"], 1, 1); l_rtl.addWidget(self.widgets["rtl_unit"], 1, 2)
         l_rtl.addWidget(QLabel("Gain (0=auto):"), 2, 0); l_rtl.addWidget(self.widgets["rtl_gain"], 2, 1); l_rtl.addWidget(QLabel("PPM Error:"), 3, 0); l_rtl.addWidget(self.widgets["rtl_ppm"], 3, 1)
         l_rtl.addWidget(QLabel("Bandwidth (kHz):"), 4, 0); l_rtl.addWidget(self.widgets["rtl_bw"], 4, 1)
         l_rtl.addWidget(QLabel("Squelch Level:"), 5, 0); l_rtl.addWidget(self.widgets["rtl_sq"], 5, 1)
         l_rtl.addWidget(QLabel("Sample Volume:"), 6, 0); l_rtl.addWidget(self.widgets["rtl_vol"], 6, 1)
         layout.addWidget(self.rtl_group)
-        self._populate_rtl_devices()
+        # hide manual device selection; dsd-fme will pick first RTL automatically
+        self.rtl_dev_label.hide()
+        self.widgets["rtl_dev"].hide()
+        self.rtl_refresh_btn.hide()
 
         def toggle_input_options(text):
             is_rtl = (text == 'rtl')
@@ -1709,12 +1736,7 @@ main
                     QMessageBox.critical(self, "Error", "No audio input device selected.")
                     return []
             elif in_type == 'rtl':
-                dev_index = self.widgets["rtl_dev"].currentData()
-                if dev_index is None:
-                    QMessageBox.critical(self, "Error", "No RTL-SDR device selected or found.")
-                    return []
                 try:
-                    dev = str(dev_index)
                     freq_val = float(self.widgets["rtl_freq"].text())
                     unit = self.widgets["rtl_unit"].currentText()
                     gain = self.widgets["rtl_gain"].text()
@@ -1722,9 +1744,12 @@ main
                     bw = self.widgets["rtl_bw"].currentText()
                     sq = self.widgets["rtl_sq"].text()
                     vol = self.widgets["rtl_vol"].text()
-                    freq_map = {"MHz": "M", "KHz": "K", "GHz": "G"}
+                    freq_map = {"MHz": "M", "KHz": "K", "GHz": "G", "Hz": ""}
                     freq_str = f"{freq_val}{freq_map.get(unit, '')}"
-                    rtl_params = [dev, freq_str, gain, ppm, bw, sq, vol]
+                    rtl_params = [freq_str, gain, ppm, bw, sq, vol]
+                    dev_index = self.widgets["rtl_dev"].currentData()
+                    if dev_index is not None:
+                        rtl_params.insert(0, str(dev_index))
                     cmd.extend(["-i", f"rtl:{':'.join(p for p in rtl_params if p)}"])
                 except ValueError:
                     QMessageBox.critical(self, "Error", "Invalid frequency value.")
