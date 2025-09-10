@@ -118,7 +118,11 @@ class AudioProcessingWindow(QDialog):
         scroll_area.setWidget(container_widget)
         container_layout = QVBoxLayout(container_widget)
 
-        container_layout.addWidget(self._create_equalizer_group())
+        self.main_app.eq_sliders = {1: [], 2: []}
+        self.main_app.eq_labels = {1: [], 2: []}
+        container_layout.addWidget(self._create_equalizer_group(1))
+        if self.main_app.widgets.get('dual_tcp') and self.main_app.widgets['dual_tcp'].isChecked():
+            container_layout.addWidget(self._create_equalizer_group(2))
         container_layout.addWidget(self._create_standard_filters_group())
         container_layout.addWidget(self._create_advanced_filters_group())
 
@@ -129,13 +133,10 @@ class AudioProcessingWindow(QDialog):
         button_layout.addWidget(close_button)
         main_layout.addLayout(button_layout)
 
-    def _create_equalizer_group(self):
-        group = QGroupBox("6-Band Equalizer")
+    def _create_equalizer_group(self, port):
+        group = QGroupBox(f"6-Band Equalizer Port {port}")
         main_layout = QVBoxLayout(group)
-
         eq_layout = QHBoxLayout()
-        self.main_app.eq_sliders = []
-        self.main_app.eq_labels = []
         eq_bands = [100, 300, 600, 1000, 3000, 6000]
 
         for i, freq in enumerate(eq_bands):
@@ -148,12 +149,12 @@ class AudioProcessingWindow(QDialog):
             slider.setValue(0)
             slider.setTickPosition(QSlider.TicksBothSides)
             slider.setTickInterval(5)
-            self.main_app._add_widget(f'eq_band_{i}', slider)
+            self.main_app._add_widget(f'eq{port}_band_{i}', slider)
 
             slider_v_layout.addWidget(label)
             slider_v_layout.addWidget(slider)
             eq_layout.addLayout(slider_v_layout)
-            self.main_app.eq_sliders.append(slider)
+            self.main_app.eq_sliders[port].append(slider)
         main_layout.addLayout(eq_layout)
 
         btn_layout = QHBoxLayout()
@@ -216,8 +217,9 @@ class AudioProcessingWindow(QDialog):
         return group
 
     def reset_equalizer(self):
-        for slider in self.main_app.eq_sliders:
-            slider.setValue(0)
+        for sliders in self.main_app.eq_sliders.values():
+            for slider in sliders:
+                slider.setValue(0)
 
     def reset_standard_filters(self):
         self.main_app.widgets['hp_filter_check'].setChecked(False)
@@ -296,10 +298,11 @@ class DSDApp(QMainWindow):
         self.udp_listeners = []
         # track state per channel (1 & 2)
         self.is_in_transmission = [False, False]; self.alerts = []; self.recording_dir = ""
-        self.is_recording = False; self.wav_file = None; self.is_resetting = False
+        self.is_recording = {1: False, 2: False}; self.wav_files = {1: None, 2: None}; self.is_resetting = False
         self.transmission_log = {}
         self.last_logged_id = [None, None]
-        self.output_stream = None; self.volume = 1.0
+        self.output_stream = None; self.output_streams = {}; self.volume = 1.0
+        self.current_tile = 'CartoDB dark_matter'; self.manual_markers = []
         self.filter_states = {}
         self.aliases = {'tg': {}, 'id': {}}
         self.current_tg = [None, None]; self.current_id = [None, None]; self.current_cc = [None, None]
@@ -515,10 +518,12 @@ class DSDApp(QMainWindow):
 
         ui_settings = config.get('ui_settings', {})
         for key, value in ui_settings.items():
-            if key.startswith('eq_band_'):
-                band_index = int(key.split('_')[-1])
-                if hasattr(self, 'eq_sliders') and band_index < len(self.eq_sliders):
-                    self.eq_sliders[band_index].setValue(value)
+            if key.startswith('eq') and '_band_' in key:
+                parts = key.replace('eq', '').split('_band_')
+                port = int(parts[0]) if parts[0].isdigit() else 1
+                band_index = int(parts[1])
+                if hasattr(self, 'eq_sliders') and port in self.eq_sliders and band_index < len(self.eq_sliders[port]):
+                    self.eq_sliders[port][band_index].setValue(value)
             elif key in self.widgets:
                 widget = self.widgets[key]
                 try:
@@ -534,7 +539,10 @@ class DSDApp(QMainWindow):
         # STT settings removed
 
 
-        if hasattr(self, 'recorder_dir_edit'): self.recorder_dir_edit.setText(ui_settings.get('recorder_dir_edit', ''))
+        if hasattr(self, 'recorder_dir_edit1'):
+            self.recorder_dir_edit1.setText(ui_settings.get('recorder_dir1', ''))
+        if hasattr(self, 'recorder_dir_edit2'):
+            self.recorder_dir_edit2.setText(ui_settings.get('recorder_dir2', ''))
         if hasattr(self, 'volume_slider'): self.volume_slider.setValue(ui_settings.get('volume_slider', 100))
 
 
@@ -550,10 +558,14 @@ class DSDApp(QMainWindow):
             except Exception: pass
 
         if hasattr(self, 'eq_sliders'):
-            for i, slider in enumerate(self.eq_sliders):
-                ui_settings[f'eq_band_{i}'] = slider.value()
+            for port, sliders in self.eq_sliders.items():
+                for i, slider in enumerate(sliders):
+                    ui_settings[f'eq{port}_band_{i}'] = slider.value()
 
-        if hasattr(self, 'recorder_dir_edit'): ui_settings['recorder_dir_edit'] = self.recorder_dir_edit.text()
+        if hasattr(self, 'recorder_dir_edit1'):
+            ui_settings['recorder_dir1'] = self.recorder_dir_edit1.text()
+        if hasattr(self, 'recorder_dir_edit2'):
+            ui_settings['recorder_dir2'] = self.recorder_dir_edit2.text()
         if hasattr(self, 'volume_slider'): ui_settings['volume_slider'] = self.volume_slider.value()
 
         p1 = self.widgets.get('dsd_path1').text() if self.widgets.get('dsd_path1') else self.dsd_fme_path
@@ -771,26 +783,33 @@ class DSDApp(QMainWindow):
         group = QGroupBox("Audio & System Controls")
         main_layout = QGridLayout(group)
 
-        self.device_combo = QComboBox(); self.populate_audio_devices()
+        # Primary output device
+        self.device_combo1 = QComboBox(); self.populate_audio_devices(self.device_combo1)
+        # Secondary output device for dual mode
+        self.device_combo2 = QComboBox(); self.populate_audio_devices(self.device_combo2)
+        self.device_combo2_label = QLabel("Output Port 2:")
+        self.device_combo2.hide(); self.device_combo2_label.hide()
+
         self.volume_slider = QSlider(Qt.Horizontal); self.volume_slider.setRange(0, 150)
         self.mute_check = QCheckBox("Mute"); self._add_widget('mute_check', self.mute_check)
         self.rms_label = QLabel("RMS: --"); self.peak_freq_label = QLabel("Peak Freq: --")
 
-        main_layout.addWidget(QLabel("Audio Output:"), 0, 0); main_layout.addWidget(self.device_combo, 0, 1)
+        main_layout.addWidget(QLabel("Output Port 1:"), 0, 0); main_layout.addWidget(self.device_combo1, 0, 1)
+        main_layout.addWidget(self.device_combo2_label, 1, 0); main_layout.addWidget(self.device_combo2, 1, 1)
         main_layout.addWidget(self.mute_check, 0, 2)
-        main_layout.addWidget(QLabel("Volume:"), 1, 0); main_layout.addWidget(self.volume_slider, 1, 1, 1, 2)
-        main_layout.addWidget(self.rms_label, 2, 0); main_layout.addWidget(self.peak_freq_label, 2, 1)
+        main_layout.addWidget(QLabel("Volume:"), 2, 0); main_layout.addWidget(self.volume_slider, 2, 1, 1, 2)
+        main_layout.addWidget(self.rms_label, 3, 0); main_layout.addWidget(self.peak_freq_label, 3, 1)
 
         if is_dashboard:
             self.audio_lab_btn = QPushButton("Open Audio-Lab")
             self.audio_lab_btn.clicked.connect(self.open_audio_lab)
-            main_layout.addWidget(self.audio_lab_btn, 3, 0, 1, 3)
+            main_layout.addWidget(self.audio_lab_btn, 4, 0, 1, 3)
 
             self.theme_combo = QComboBox(); self.theme_combo.addItems(self.themes.keys()); self.theme_combo.currentTextChanged.connect(self.apply_theme)
-            main_layout.addWidget(QLabel("Theme:"), 4, 0); main_layout.addWidget(self.theme_combo, 4, 1, 1, 2)
+            main_layout.addWidget(QLabel("Theme:"), 5, 0); main_layout.addWidget(self.theme_combo, 5, 1, 1, 2)
 
             self.colormap_combo = QComboBox(); self.colormap_combo.addItems(self.colormaps.keys()); self.colormap_combo.currentTextChanged.connect(lambda name: self.imv.setColorMap(self.colormaps[name]))
-            main_layout.addWidget(QLabel("Spectrogram:"), 5, 0); main_layout.addWidget(self.colormap_combo, 5, 1, 1, 2)
+            main_layout.addWidget(QLabel("Spectrogram:"), 6, 0); main_layout.addWidget(self.colormap_combo, 6, 1, 1, 2)
 
             self.spec_source_combo = QComboBox(); self.spec_source_combo.addItems(["Port 1", "Port 2"]); self.spec_source_combo.currentIndexChanged.connect(lambda _ : self.spec_data.fill(MIN_DB))
             main_layout.addWidget(QLabel("Spec Source:"), 6, 0); main_layout.addWidget(self.spec_source_combo, 6, 1, 1, 2)
@@ -801,8 +820,9 @@ class DSDApp(QMainWindow):
             self.btn_start_dash = QPushButton("START"); self.btn_start_dash.clicked.connect(self.start_process)
             self.btn_stop_dash = QPushButton("STOP"); self.btn_stop_dash.setEnabled(False); self.btn_stop_dash.clicked.connect(self.stop_process)
             main_layout.addWidget(self.btn_start_dash, 7, 1); main_layout.addWidget(self.btn_stop_dash, 7, 2)
-
-        self.device_combo.currentIndexChanged.connect(self.restart_audio_stream); self.volume_slider.valueChanged.connect(self.set_volume)
+        self.device_combo1.currentIndexChanged.connect(self.restart_audio_streams)
+        self.device_combo2.currentIndexChanged.connect(self.restart_audio_streams)
+        self.volume_slider.valueChanged.connect(self.set_volume)
         return group
 
     def open_audio_lab(self):
@@ -816,13 +836,15 @@ class DSDApp(QMainWindow):
         self.alert_value_edit = QLineEdit(); self.alert_value_edit.setPlaceholderText("Enter TG or ID value...")
         self.alert_sound_edit = QLineEdit(); self.alert_sound_edit.setPlaceholderText("Default Beep")
         self.alert_sound_browse_btn = QPushButton("Browse..."); self.alert_sound_browse_btn.clicked.connect(self.browse_for_alert_sound)
+        self.alert_port_combo = QComboBox(); self.alert_port_combo.addItems(["Any", "Port 1", "Port 2"])
         self.alert_add_btn = QPushButton("Add/Update Alert"); self.alert_add_btn.clicked.connect(self.add_alert)
         form_layout.addWidget(QLabel("Alert Type:"), 0, 0); form_layout.addWidget(self.alert_type_combo, 0, 1)
         form_layout.addWidget(QLabel("Value:"), 1, 0); form_layout.addWidget(self.alert_value_edit, 1, 1)
         form_layout.addWidget(QLabel("Sound File (.wav):"), 2, 0); form_layout.addWidget(self.alert_sound_edit, 2, 1); form_layout.addWidget(self.alert_sound_browse_btn, 2, 2)
-        form_layout.addWidget(self.alert_add_btn, 3, 1, 1, 2)
+        form_layout.addWidget(QLabel("Port:"), 3, 0); form_layout.addWidget(self.alert_port_combo, 3, 1)
+        form_layout.addWidget(self.alert_add_btn, 4, 1, 1, 2)
 
-        self.alerts_table = QTableWidget(); self.alerts_table.setColumnCount(3); self.alerts_table.setHorizontalHeaderLabels(["Type", "Value", "Sound Path"])
+        self.alerts_table = QTableWidget(); self.alerts_table.setColumnCount(4); self.alerts_table.setHorizontalHeaderLabels(["Type", "Value", "Sound Path", "Port"])
         self.alerts_table.setEditTriggers(QAbstractItemView.NoEditTriggers); self.alerts_table.setSelectionBehavior(QAbstractItemView.SelectRows); self.alerts_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.alerts_table.itemClicked.connect(self.populate_alert_form)
         self.alert_remove_btn = QPushButton("Remove Selected Alert"); self.alert_remove_btn.clicked.connect(self.remove_alert)
@@ -837,8 +859,14 @@ class DSDApp(QMainWindow):
 
     def _create_map_tab(self):
         widget = QWidget(); layout = QVBoxLayout(widget)
-        self.map_view = QWebEngineView()
+        controls = QHBoxLayout()
+        self.map_tile_combo = QComboBox(); self.map_tile_combo.addItems(["Dark", "Satellite", "Topo"])
+        self.map_tile_combo.currentTextChanged.connect(lambda _: self.create_initial_map())
+        self.add_marker_btn = QPushButton("Add Marker"); self.add_marker_btn.clicked.connect(self.add_marker_dialog)
+        controls.addWidget(QLabel("Tiles:")); controls.addWidget(self.map_tile_combo); controls.addWidget(self.add_marker_btn); controls.addStretch()
+        layout.addLayout(controls)
 
+        self.map_view = QWebEngineView()
         if not os.path.exists(MAP_FILE):
             self.create_initial_map()
         self.map_view.setUrl(QUrl.fromLocalFile(os.path.abspath(MAP_FILE)))
@@ -847,11 +875,30 @@ class DSDApp(QMainWindow):
         return widget
 
     def create_initial_map(self):
-        map_obj = folium.Map(location=[52.237, 21.017], zoom_start=6, tiles="CartoDB dark_matter")
+        tile_map = {
+            'Dark': 'CartoDB dark_matter',
+            'Satellite': 'Esri WorldImagery',
+            'Topo': 'OpenTopoMap'
+        }
+        self.current_tile = tile_map.get(self.map_tile_combo.currentText(), 'CartoDB dark_matter') if hasattr(self, 'map_tile_combo') else self.current_tile
+        map_obj = folium.Map(location=[52.237, 21.017], zoom_start=6, tiles=self.current_tile)
+        for m in getattr(self, 'manual_markers', []):
+            folium.Marker(location=[m['lat'], m['lon']], tooltip=m.get('label', 'Marker')).add_to(map_obj)
         map_obj.save(MAP_FILE)
         if hasattr(self, 'map_view'):
             self.map_view.setUrl(QUrl.fromLocalFile(os.path.abspath(MAP_FILE)))
             self.map_view.reload()
+
+    def add_marker_dialog(self):
+        text, ok = QInputDialog.getText(self, "Add Marker", "Enter lat,lon,label:")
+        if ok and text:
+            parts = text.split(',')
+            try:
+                lat = float(parts[0]); lon = float(parts[1]); label = parts[2] if len(parts) > 2 else 'Marker'
+                self.manual_markers.append({'lat': lat, 'lon': lon, 'label': label})
+                self.create_initial_map()
+            except Exception:
+                QMessageBox.warning(self, "Input Error", "Invalid coordinates")
 
     def update_map_from_lrrp(self, path):
         print(f"LRRP file changed: {path}")
@@ -874,16 +921,15 @@ class DSDApp(QMainWindow):
                 return
 
             last_location = locations[-1]
-            map_obj = folium.Map(location=[last_location['lat'], last_location['lon']], zoom_start=14, tiles="CartoDB dark_matter")
+            map_obj = folium.Map(location=[last_location['lat'], last_location['lon']], zoom_start=14, tiles=self.current_tile)
 
             for loc in locations:
                 alias = self.aliases['id'].get(loc['id'], loc['id'])
                 popup_text = f"<b>ID:</b> {alias}<br><b>Time:</b> {loc['time']}"
-                folium.Marker(
-                    location=[loc['lat'], loc['lon']],
-                    popup=popup_text,
-                    tooltip=alias
-                ).add_to(map_obj)
+                folium.Marker(location=[loc['lat'], loc['lon']], popup=popup_text, tooltip=alias).add_to(map_obj)
+
+            for m in self.manual_markers:
+                folium.Marker(location=[m['lat'], m['lon']], tooltip=m.get('label', 'Marker')).add_to(map_obj)
 
             map_obj.save(MAP_FILE)
             self.map_view.setUrl(QUrl.fromLocalFile(os.path.abspath(MAP_FILE)))
@@ -1297,8 +1343,12 @@ class DSDApp(QMainWindow):
     def _create_recorder_tab(self):
         widget = QWidget(); layout = QGridLayout(widget)
         self.recorder_enabled_check = QCheckBox("Enable Voice-Activated Recording to Directory"); self.recorder_enabled_check.toggled.connect(lambda state: self.recorder_enabled_check_dash.setChecked(state)); self._add_widget('recorder_enabled_check', self.recorder_enabled_check)
-        self.recorder_dir_edit = QLineEdit(); self.recorder_dir_edit.setPlaceholderText("Select directory for WAV files...")
-        self.recorder_browse_btn = QPushButton("Browse..."); self.recorder_browse_btn.clicked.connect(self.browse_for_recording_dir)
+        self.recorder_dir_edits = {}
+        self.recorder_dir_edit1 = QLineEdit(); self.recorder_dir_edit1.setPlaceholderText("Select directory for Port 1...")
+        self.recorder_dir_edit2 = QLineEdit(); self.recorder_dir_edit2.setPlaceholderText("Select directory for Port 2...")
+        self.recorder_dir_edits[1] = self.recorder_dir_edit1; self.recorder_dir_edits[2] = self.recorder_dir_edit2
+        self.recorder_browse_btn1 = QPushButton("Browse..."); self.recorder_browse_btn1.clicked.connect(lambda: self.browse_for_recording_dir(1))
+        self.recorder_browse_btn2 = QPushButton("Browse..."); self.recorder_browse_btn2.clicked.connect(lambda: self.browse_for_recording_dir(2)); self.recorder_dir_edit2.hide(); self.recorder_browse_btn2.hide()
         self.recording_list = QListWidget(); self.recording_list.itemDoubleClicked.connect(self.play_recording)
         play_btn = QPushButton("Play Selected Recording"); play_btn.clicked.connect(self.play_recording)
         self.per_call_check = self._add_widget("-P", QCheckBox("Enable Per-Call WAV Saving (-P)"))
@@ -1306,8 +1356,9 @@ class DSDApp(QMainWindow):
         self.per_call_dir_browse_btn = QPushButton("Browse...")
         self.per_call_dir_browse_btn.clicked.connect(lambda: self._browse_for_path(self.per_call_dir_edit, is_dir=True))
         layout.addWidget(self.recorder_enabled_check, 0, 0, 1, 3)
-        layout.addWidget(QLabel("Recording Directory:"), 1, 0); layout.addWidget(self.recorder_dir_edit, 1, 1); layout.addWidget(self.recorder_browse_btn, 1, 2)
-        layout.addWidget(self.recording_list, 2, 0, 1, 3); layout.addWidget(play_btn, 3, 0, 1, 3)
+        layout.addWidget(QLabel("Dir Port 1:"), 1, 0); layout.addWidget(self.recorder_dir_edit1, 1, 1); layout.addWidget(self.recorder_browse_btn1, 1, 2)
+        layout.addWidget(QLabel("Dir Port 2:"), 2, 0); layout.addWidget(self.recorder_dir_edit2, 2, 1); layout.addWidget(self.recorder_browse_btn2, 2, 2)
+        layout.addWidget(self.recording_list, 3, 0, 1, 3); layout.addWidget(play_btn, 4, 0, 1, 3)
         layout.addWidget(self.per_call_check, 4, 0, 1, 3)
         layout.addWidget(QLabel("Per-Call Dir [-7]:"), 5, 0); layout.addWidget(self.per_call_dir_edit, 5, 1); layout.addWidget(self.per_call_dir_browse_btn, 5, 2)
         return widget
@@ -1377,6 +1428,14 @@ class DSDApp(QMainWindow):
         if hasattr(self, 'key_fields_port2'):
             for w in self.key_fields_port2:
                 w.setVisible(enabled)
+        if hasattr(self, 'device_combo2'):
+            self.device_combo2.setVisible(enabled)
+            self.device_combo2_label.setVisible(enabled)
+        if hasattr(self, 'recorder_dir_edit2'):
+            self.recorder_dir_edit2.setVisible(enabled)
+            self.recorder_browse_btn2.setVisible(enabled)
+        if hasattr(self, 'restart_audio_streams'):
+            self.restart_audio_streams()
 
     def _add_widget(self, key, widget, properties=None):
         self.widgets[key] = widget
@@ -1549,7 +1608,7 @@ class DSDApp(QMainWindow):
                 self.lrrp_watcher.removePaths(self.lrrp_watcher.files())
             self.lrrp_watcher.addPath(lrrp_file_path)
 
-        self.restart_audio_stream()
+        self.restart_audio_streams()
         self.start_udp_listeners(len(commands))
         for idx, cmd in enumerate(commands):
             log_start_msg = f"$ {subprocess.list2cmdline(cmd)}\n\n"
@@ -1600,13 +1659,17 @@ class DSDApp(QMainWindow):
             self.set_ui_running_state(False)
 
     def stop_process(self):
-        if self.is_recording:
+        if any(self.is_recording.values()):
             self.stop_internal_recording()
         self.stop_udp_listeners()
+        for stream in self.output_streams.values():
+            try:
+                stream.stop(); stream.close()
+            except Exception:
+                pass
+        self.output_streams = {}
         if self.output_stream:
-            self.output_stream.stop()
-            self.output_stream.close()
-            self.output_stream = None
+            self.output_stream.stop(); self.output_stream.close(); self.output_stream = None
 
         if self.processes:
             self.set_ui_running_state(False)
@@ -1693,10 +1756,10 @@ class DSDApp(QMainWindow):
                         self.start_new_log_entry(self.current_id[idx], self.current_tg[idx], self.current_cc[idx])
                         self.last_logged_id[idx] = self.current_id[idx]
                         if self.recorder_enabled_check.isChecked():
-                            if self.is_recording:
-                                self.stop_internal_recording()
-                            self.start_internal_recording(self.current_id[idx])
-                        self.check_for_alerts(self.current_tg[idx], self.current_id[idx])
+                            if self.is_recording.get(idx, False):
+                                self.stop_internal_recording(idx)
+                            self.start_internal_recording(self.current_id[idx], idx)
+                        self.check_for_alerts(self.current_tg[idx], self.current_id[idx], idx)
                 elif not self.is_in_transmission[idx]:
                     for panel in panels:
                         panel['status'].setText(text.strip().replace("Sync: ", ""))
@@ -1707,8 +1770,8 @@ class DSDApp(QMainWindow):
                 self.end_all_transmissions()
                 for panel in panels:
                     panel['status'].setText("No Sync")
-                if self.is_recording:
-                    self.stop_internal_recording()
+                if self.is_recording.get(idx, False):
+                    self.stop_internal_recording(idx)
                 self.current_id[idx] = None
                 self.current_tg[idx] = None
                 self.last_logged_id[idx] = None
@@ -1774,21 +1837,38 @@ class DSDApp(QMainWindow):
             self.last_logged_id = [None, None]
             hasattr(self, 'scope_curve') and self.scope_curve.setData([])
 
-    def start_internal_recording(self, id_):
-        rec_dir = self.recorder_dir_edit.text();_id=id_.replace('/','-')
-        if not rec_dir or not os.path.isdir(rec_dir): return
-        filepath = os.path.join(rec_dir, datetime.now().strftime("%Y-%m-%d_%H%M%S") + f"_ID_{_id}.wav")
+    def start_internal_recording(self, id_, channel):
+        rec_edit = self.recorder_dir_edits.get(channel)
+        rec_dir = rec_edit.text() if rec_edit else ""
+        _id = id_.replace('/', '-')
+        if not rec_dir or not os.path.isdir(rec_dir):
+            return
+        filepath = os.path.join(rec_dir, datetime.now().strftime("%Y-%m-%d_%H%M%S") + f"_ch{channel}_ID_{_id}.wav")
         try:
-            self.wav_file = wave.open(filepath, 'wb'); self.wav_file.setnchannels(WAV_CHANNELS); self.wav_file.setsampwidth(WAV_SAMPWIDTH); self.wav_file.setframerate(AUDIO_RATE); self.is_recording = True
+            wav = wave.open(filepath, 'wb')
+            wav.setnchannels(WAV_CHANNELS)
+            wav.setsampwidth(WAV_SAMPWIDTH)
+            wav.setframerate(AUDIO_RATE)
+            self.wav_files[channel] = wav
+            self.is_recording[channel] = True
             for panel in self.live_labels_conf + self.live_labels_dash:
                 panel and (panel['recording'].setText("ACTIVE"), panel['recording'].setStyleSheet("color: #ffaa00; font-weight: bold;"))
-        except Exception as e: print(f"Error starting recording: {e}"); self.wav_file = None; self.is_recording = False
+        except Exception as e:
+            print(f"Error starting recording: {e}")
+            self.wav_files[channel] = None
+            self.is_recording[channel] = False
 
-    def stop_internal_recording(self):
-        if self.wav_file:
-            try: self.wav_file.close()
-            except Exception as e: print(f"Error closing wav file: {e}")
-        self.wav_file = None; self.is_recording = False
+    def stop_internal_recording(self, channel=None):
+        channels = [channel] if channel else list(self.wav_files.keys())
+        for ch in channels:
+            wav = self.wav_files.get(ch)
+            if wav:
+                try:
+                    wav.close()
+                except Exception as e:
+                    print(f"Error closing wav file: {e}")
+            self.wav_files[ch] = None
+            self.is_recording[ch] = False
         for panel in self.live_labels_conf + self.live_labels_dash:
             panel and (panel['recording'].setText("INACTIVE"), panel['recording'].setStyleSheet("color: gray;"))
 
@@ -1811,45 +1891,56 @@ class DSDApp(QMainWindow):
         audio_samples = np.frombuffer(raw_data[:clean_num_bytes], dtype=AUDIO_DTYPE)
 
         try:
-            filtered_samples = self.apply_filters(audio_samples.copy())
+            filtered_samples = self.apply_filters(audio_samples.copy(), channel)
         except KeyError as e:
             print(f"Filter widget not ready, skipping filtering. Error: {e}")
             filtered_samples = audio_samples
 
-        # buffer per channel
-        self.channel_buffers[channel] = np.concatenate(
-            (self.channel_buffers[channel], filtered_samples)
-        )
+        self.channel_buffers[channel] = np.concatenate((self.channel_buffers[channel], filtered_samples))
 
-        frames = []
-        n = min(len(self.channel_buffers[1]), len(self.channel_buffers[2]))
-        if n > 0:
-            left = self.channel_buffers[1][:n]
-            right = self.channel_buffers[2][:n]
-            self.channel_buffers[1] = self.channel_buffers[1][n:]
-            self.channel_buffers[2] = self.channel_buffers[2][n:]
-            frames.append(np.column_stack((left, right)))
-
-        for ch in (1, 2):
-            other = 2 if ch == 1 else 1
-            if len(self.channel_buffers[ch]) > 0 and len(self.channel_buffers[other]) == 0:
-                data = self.channel_buffers[ch]
-                self.channel_buffers[ch] = np.array([], dtype=AUDIO_DTYPE)
-                if ch == 1:
-                    frames.append(np.column_stack((data, np.zeros_like(data))))
-                else:
-                    frames.append(np.column_stack((np.zeros_like(data), data)))
-
-        if self.is_recording and self.wav_file:
-            for frame in frames:
-                self.wav_file.writeframes(frame.astype(AUDIO_DTYPE).tobytes())
-
-        if not self.mute_check.isChecked() and self.output_stream:
-            for frame in frames:
+        dual = self.widgets.get('dual_tcp') and self.widgets['dual_tcp'].isChecked() and self.output_streams
+        if dual:
+            data = self.channel_buffers[channel]
+            self.channel_buffers[channel] = np.array([], dtype=AUDIO_DTYPE)
+            if self.is_recording.get(channel) and self.wav_files.get(channel):
+                stereo = np.column_stack((data, np.zeros_like(data))) if channel == 1 else np.column_stack((np.zeros_like(data), data))
+                self.wav_files[channel].writeframes(stereo.astype(AUDIO_DTYPE).tobytes())
+            if not self.mute_check.isChecked() and channel in self.output_streams:
                 try:
-                    self.output_stream.write((frame * self.volume).astype(AUDIO_DTYPE))
+                    self.output_streams[channel].write((data * self.volume).astype(AUDIO_DTYPE))
                 except Exception:
                     pass
+        else:
+            frames = []
+            n = min(len(self.channel_buffers[1]), len(self.channel_buffers[2]))
+            if n > 0:
+                left = self.channel_buffers[1][:n]
+                right = self.channel_buffers[2][:n]
+                self.channel_buffers[1] = self.channel_buffers[1][n:]
+                self.channel_buffers[2] = self.channel_buffers[2][n:]
+                frames.append(np.column_stack((left, right)))
+
+            for ch in (1, 2):
+                other = 2 if ch == 1 else 1
+                if len(self.channel_buffers[ch]) > 0 and len(self.channel_buffers[other]) == 0:
+                    data = self.channel_buffers[ch]
+                    self.channel_buffers[ch] = np.array([], dtype=AUDIO_DTYPE)
+                    if ch == 1:
+                        frames.append(np.column_stack((data, np.zeros_like(data))))
+                    else:
+                        frames.append(np.column_stack((np.zeros_like(data), data)))
+
+            for ch in (1, 2):
+                if self.is_recording.get(ch) and self.wav_files.get(ch):
+                    for frame in frames:
+                        self.wav_files[ch].writeframes(frame.astype(AUDIO_DTYPE).tobytes())
+
+            if not self.mute_check.isChecked() and self.output_stream:
+                for frame in frames:
+                    try:
+                        self.output_stream.write((frame * self.volume).astype(AUDIO_DTYPE))
+                    except Exception:
+                        pass
 
         show_visuals = not hasattr(self, 'spec_source_combo') or self.spec_source_combo.currentIndex() + 1 == channel
         if show_visuals:
@@ -2118,17 +2209,24 @@ class DSDApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not import statistics file: {e}\nThe file may be corrupted or in a wrong format.")
 
-    def browse_for_recording_dir(self):
+    def browse_for_recording_dir(self, channel):
         path = QFileDialog.getExistingDirectory(self, "Select Recording Directory")
-        if path: self.recorder_dir_edit.setText(path); self.fs_watcher.addPath(path); self.update_recording_list()
+        if path:
+            edit = self.recorder_dir_edits.get(channel)
+            if edit:
+                edit.setText(path)
+            self.fs_watcher.addPath(path)
+            self.update_recording_list()
 
     def update_recording_list(self):
-        self.recording_list.clear(); rec_dir = self.recorder_dir_edit.text()
-        if rec_dir and os.path.exists(rec_dir): self.recording_list.addItems(QDir(rec_dir).entryList(["*.wav"], QDir.Files | QDir.NoDotAndDotDot, QDir.Time))
+        self.recording_list.clear()
+        rec_dir = self.recorder_dir_edit1.text()
+        if rec_dir and os.path.exists(rec_dir):
+            self.recording_list.addItems(QDir(rec_dir).entryList(["*.wav"], QDir.Files | QDir.NoDotAndDotDot, QDir.Time))
 
     def play_recording(self):
         selected = self.recording_list.selectedItems()
-        path = os.path.join(self.recorder_dir_edit.text(), (selected[0] if selected else self.recording_list.item(0)).text()) if self.recording_list.count() > 0 else None
+        path = os.path.join(self.recorder_dir_edit1.text(), (selected[0] if selected else self.recording_list.item(0)).text()) if self.recording_list.count() > 0 else None
         if path and os.path.exists(path): QSound.play(path)
 
     def import_csv_to_logbook(self):
@@ -2172,12 +2270,22 @@ class DSDApp(QMainWindow):
                 QMessageBox.critical(self, "Save Error", f"Could not save CSV file:\n{e}")
 
     def add_alert(self):
-        alert_type = "TG" if self.alert_type_combo.currentText() == "Talkgroup (TG)" else "ID"; value = self.alert_value_edit.text().strip(); sound = self.alert_sound_edit.text().strip() or "Default"
-        if not value: QMessageBox.warning(self, "Input Error", "Value cannot be empty."); return
-        existing_alert_index = next((i for i, alert in enumerate(self.alerts) if alert['type'] == alert_type and alert['value'] == value), None)
-        if existing_alert_index is not None: self.alerts[existing_alert_index]['sound'] = sound
-        else: self.alerts.append({"type": alert_type, "value": value, "sound": sound})
-        self.update_alerts_list(); self.alert_value_edit.clear(); self.alert_sound_edit.clear()
+        alert_type = "TG" if self.alert_type_combo.currentText() == "Talkgroup (TG)" else "ID"
+        value = self.alert_value_edit.text().strip()
+        sound = self.alert_sound_edit.text().strip() or "Default"
+        port = self.alert_port_combo.currentIndex()
+        if not value:
+            QMessageBox.warning(self, "Input Error", "Value cannot be empty.")
+            return
+        existing_alert_index = next((i for i, alert in enumerate(self.alerts)
+                                     if alert['type'] == alert_type and alert['value'] == value and alert.get('port', 0) == port), None)
+        if existing_alert_index is not None:
+            self.alerts[existing_alert_index]['sound'] = sound
+            self.alerts[existing_alert_index]['port'] = port
+        else:
+            self.alerts.append({"type": alert_type, "value": value, "sound": sound, "port": port})
+        self.update_alerts_list()
+        self.alert_value_edit.clear(); self.alert_sound_edit.clear()
 
     def remove_alert(self):
         current_row = self.alerts_table.currentRow()
@@ -2187,13 +2295,19 @@ class DSDApp(QMainWindow):
         self.alerts_table.setRowCount(0)
         for alert in self.alerts:
             row = self.alerts_table.rowCount(); self.alerts_table.insertRow(row)
-            self.alerts_table.setItem(row, 0, QTableWidgetItem(alert['type'])); self.alerts_table.setItem(row, 1, QTableWidgetItem(alert['value'])); self.alerts_table.setItem(row, 2, QTableWidgetItem(alert['sound']))
+            self.alerts_table.setItem(row, 0, QTableWidgetItem(alert['type']))
+            self.alerts_table.setItem(row, 1, QTableWidgetItem(alert['value']))
+            self.alerts_table.setItem(row, 2, QTableWidgetItem(alert['sound']))
+            port_text = "Any" if alert.get('port',0)==0 else f"Port {alert['port']}"
+            self.alerts_table.setItem(row, 3, QTableWidgetItem(port_text))
 
     def populate_alert_form(self, item):
         row = item.row()
-        self.alert_type_combo.setCurrentText(f"Talkgroup (TG)" if self.alerts[row]['type'] == 'TG' else "Radio ID")
+        self.alert_type_combo.setCurrentText("Talkgroup (TG)" if self.alerts[row]['type'] == 'TG' else "Radio ID")
         self.alert_value_edit.setText(self.alerts[row]['value'])
         self.alert_sound_edit.setText(self.alerts[row]['sound'] if self.alerts[row]['sound'] != "Default" else "")
+        port = self.alerts[row].get('port', 0)
+        self.alert_port_combo.setCurrentIndex(port)
 
     def play_alert_sound(self, sound_path):
         if sound_path == "Default" or not sound_path:
@@ -2202,33 +2316,66 @@ class DSDApp(QMainWindow):
         elif os.path.exists(sound_path):
             QSound.play(sound_path)
 
-    def check_for_alerts(self, tg, id):
-        if not tg or not id: return
+    def check_for_alerts(self, tg, id, port=None):
+        if not tg or not id:
+            return
         for alert in self.alerts:
-            if (alert['type'] == 'TG' and alert['value'] == tg) or (alert['type'] == 'ID' and alert['value'] == id): self.play_alert_sound(alert['sound']); break
+            if ((alert['type'] == 'TG' and alert['value'] == tg) or (alert['type'] == 'ID' and alert['value'] == id)) and (
+                alert.get('port', 0) in (0, port if port is not None else 0)
+            ):
+                self.play_alert_sound(alert['sound'])
+                break
 
-    def populate_audio_devices(self):
+    def populate_audio_devices(self, combo):
         try:
             devices = sd.query_devices(); default_out = sd.default.device[1]
             for i, device in enumerate(devices):
-                if device['max_output_channels'] > 0: self.device_combo.addItem(f"{device['name']}{' (Default)' if i == default_out else ''}", userData=i)
-        except Exception as e: print(f"Could not query audio devices: {e}")
+                if device['max_output_channels'] > 0:
+                    combo.addItem(f"{device['name']}{' (Default)' if i == default_out else ''}", userData=i)
+        except Exception as e:
+            print(f"Could not query audio devices: {e}")
 
-    def restart_audio_stream(self):
+    def restart_audio_streams(self):
+        # Close existing streams
+        if hasattr(self, 'output_streams'):
+            for stream in self.output_streams.values():
+                try:
+                    stream.stop(); stream.close()
+                except Exception:
+                    pass
+        self.output_streams = {}
         if self.output_stream:
-            self.output_stream.stop()
-            self.output_stream.close()
+            try:
+                self.output_stream.stop(); self.output_stream.close()
+            except Exception:
+                pass
+            self.output_stream = None
+
         self.filter_states.clear()
         self.channel_buffers = {1: np.array([], dtype=AUDIO_DTYPE), 2: np.array([], dtype=AUDIO_DTYPE)}
+
+        dual = self.widgets.get('dual_tcp') and self.widgets['dual_tcp'].isChecked()
         try:
-            self.output_stream = sd.OutputStream(samplerate=AUDIO_RATE, device=self.device_combo.currentData(), channels=2, dtype=AUDIO_DTYPE, blocksize=CHUNK_SAMPLES)
-            self.output_stream.start()
+            if dual:
+                for ch, combo in ((1, self.device_combo1), (2, self.device_combo2)):
+                    device = combo.currentData()
+                    if device is None:
+                        continue
+                    stream = sd.OutputStream(samplerate=AUDIO_RATE, device=device, channels=1,
+                                            dtype=AUDIO_DTYPE, blocksize=CHUNK_SAMPLES)
+                    stream.start()
+                    self.output_streams[ch] = stream
+            else:
+                device = self.device_combo1.currentData()
+                self.output_stream = sd.OutputStream(samplerate=AUDIO_RATE, device=device, channels=2,
+                                                    dtype=AUDIO_DTYPE, blocksize=CHUNK_SAMPLES)
+                self.output_stream.start()
         except Exception as e:
             print(f"Error opening audio stream: {e}")
 
     def set_volume(self, value): self.volume = value / 100.0
 
-    def apply_filters(self, samples):
+    def apply_filters(self, samples, channel=1):
         samples_float = samples.astype(np.float32)
 
         if self.widgets['agc_check'].isChecked():
@@ -2276,7 +2423,8 @@ class DSDApp(QMainWindow):
 
         if hasattr(self, 'eq_sliders'):
             eq_bands = [100, 300, 600, 1000, 3000, 6000]
-            for i, slider in enumerate(self.eq_sliders):
+            sliders = self.eq_sliders.get(channel, []) if isinstance(self.eq_sliders, dict) else self.eq_sliders
+            for i, slider in enumerate(sliders):
                 gain_db = slider.value()
                 if abs(gain_db) > 0.1: # Apply only if there is a change
                     center_freq = eq_bands[i]
@@ -2323,4 +2471,3 @@ if __name__ == '__main__':
         sys.exit(app.exec_())
     else:
         sys.exit(0)
-
