@@ -60,6 +60,7 @@ from pyqtgraph import DateAxisItem, AxisItem
 import sounddevice as sd
 from scipy import signal
 import folium
+from folium.plugins import MousePosition
 
 try:
     import winsound
@@ -120,9 +121,25 @@ class AudioProcessingWindow(QDialog):
 
         self.main_app.eq_sliders = {1: [], 2: []}
         self.main_app.eq_labels = {1: [], 2: []}
-        container_layout.addWidget(self._create_equalizer_group(1))
-        if self.main_app.widgets.get('dual_tcp') and self.main_app.widgets['dual_tcp'].isChecked():
-            container_layout.addWidget(self._create_equalizer_group(2))
+
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(QLabel("Equalizer Mode:"))
+        self.eq_mode_combo = QComboBox()
+        self.eq_mode_combo.addItems([
+            "Both Ports (Same)",
+            "Port 1 Only",
+            "Port 2 Only",
+            "Both Ports (Separate)"
+        ])
+        self.eq_mode_combo.currentIndexChanged.connect(self.update_eq_mode)
+        mode_layout.addWidget(self.eq_mode_combo)
+        mode_layout.addStretch()
+        container_layout.addLayout(mode_layout)
+
+        self.eq_group1 = self._create_equalizer_group(1)
+        self.eq_group2 = self._create_equalizer_group(2)
+        container_layout.addWidget(self.eq_group1)
+        container_layout.addWidget(self.eq_group2)
         container_layout.addWidget(self._create_standard_filters_group())
         container_layout.addWidget(self._create_advanced_filters_group())
 
@@ -132,6 +149,26 @@ class AudioProcessingWindow(QDialog):
         button_layout.addStretch()
         button_layout.addWidget(close_button)
         main_layout.addLayout(button_layout)
+        self.update_eq_mode()
+
+    def update_eq_mode(self):
+        idx = self.eq_mode_combo.currentIndex()
+        if idx == 0:
+            self.eq_group1.show(); self.eq_group2.hide()
+            self.main_app.eq_mode = 'both_same'
+            self.main_app.eq_target_ports = [1, 2]
+        elif idx == 1:
+            self.eq_group1.show(); self.eq_group2.hide()
+            self.main_app.eq_mode = 'port1'
+            self.main_app.eq_target_ports = [1]
+        elif idx == 2:
+            self.eq_group1.hide(); self.eq_group2.show()
+            self.main_app.eq_mode = 'port2'
+            self.main_app.eq_target_ports = [2]
+        else:
+            self.eq_group1.show(); self.eq_group2.show()
+            self.main_app.eq_mode = 'separate'
+            self.main_app.eq_target_ports = [1, 2]
 
     def _create_equalizer_group(self, port):
         group = QGroupBox(f"6-Band Equalizer Port {port}")
@@ -309,6 +346,11 @@ class DSDApp(QMainWindow):
         self.fs_watcher = QFileSystemWatcher(); self.fs_watcher.directoryChanged.connect(self.update_recording_list)
         self.lrrp_watcher = QFileSystemWatcher()
         self.lrrp_watcher.fileChanged.connect(self.update_map_from_lrrp)
+
+        # equalizer routing mode and slider storage
+        self.eq_mode = 'both_same'
+        self.eq_target_ports = [1, 2]
+        self.eq_sliders = {1: [], 2: []}
 
         self.setWindowTitle("DSD-FME-GUI-BY Kameleon v3.0")
         self.setGeometry(100, 100, 1600, 950)
@@ -791,12 +833,17 @@ class DSDApp(QMainWindow):
         self.device_combo2.hide(); self.device_combo2_label.hide()
 
         self.volume_slider = QSlider(Qt.Horizontal); self.volume_slider.setRange(0, 150)
-        self.mute_check = QCheckBox("Mute"); self._add_widget('mute_check', self.mute_check)
+        self.mute_check1 = QCheckBox("Mute")
+        self.mute_check2 = QCheckBox("Mute")
+        self._add_widget('mute_check1', self.mute_check1)
+        self._add_widget('mute_check2', self.mute_check2)
+        self.mute_check2.hide()
         self.rms_label = QLabel("RMS: --"); self.peak_freq_label = QLabel("Peak Freq: --")
 
         main_layout.addWidget(QLabel("Output Port 1:"), 0, 0); main_layout.addWidget(self.device_combo1, 0, 1)
         main_layout.addWidget(self.device_combo2_label, 1, 0); main_layout.addWidget(self.device_combo2, 1, 1)
-        main_layout.addWidget(self.mute_check, 0, 2)
+        main_layout.addWidget(self.mute_check1, 0, 2)
+        main_layout.addWidget(self.mute_check2, 1, 2)
         main_layout.addWidget(QLabel("Volume:"), 2, 0); main_layout.addWidget(self.volume_slider, 2, 1, 1, 2)
         main_layout.addWidget(self.rms_label, 3, 0); main_layout.addWidget(self.peak_freq_label, 3, 1)
 
@@ -810,9 +857,6 @@ class DSDApp(QMainWindow):
 
             self.colormap_combo = QComboBox(); self.colormap_combo.addItems(self.colormaps.keys()); self.colormap_combo.currentTextChanged.connect(lambda name: self.imv.setColorMap(self.colormaps[name]))
             main_layout.addWidget(QLabel("Spectrogram:"), 6, 0); main_layout.addWidget(self.colormap_combo, 6, 1, 1, 2)
-
-            self.spec_source_combo = QComboBox(); self.spec_source_combo.addItems(["Port 1", "Port 2"]); self.spec_source_combo.currentIndexChanged.connect(lambda _ : self.spec_data.fill(MIN_DB))
-            main_layout.addWidget(QLabel("Spec Source:"), 6, 0); main_layout.addWidget(self.spec_source_combo, 6, 1, 1, 2)
 
             self.recorder_enabled_check_dash = QCheckBox("Enable Rec."); self.recorder_enabled_check_dash.toggled.connect(lambda state: self.recorder_enabled_check.setChecked(state)); self._add_widget('recorder_enabled_check_dash', self.recorder_enabled_check_dash)
             main_layout.addWidget(self.recorder_enabled_check_dash, 7, 0)
@@ -862,8 +906,12 @@ class DSDApp(QMainWindow):
         controls = QHBoxLayout()
         self.map_tile_combo = QComboBox(); self.map_tile_combo.addItems(["Dark", "Satellite", "Topo"])
         self.map_tile_combo.currentTextChanged.connect(lambda _: self.create_initial_map())
+        self.coord_format_combo = QComboBox(); self.coord_format_combo.addItems(["Lat/Lon"])
+        self.coord_format_combo.currentTextChanged.connect(lambda _: self.create_initial_map())
         self.add_marker_btn = QPushButton("Add Marker"); self.add_marker_btn.clicked.connect(self.add_marker_dialog)
-        controls.addWidget(QLabel("Tiles:")); controls.addWidget(self.map_tile_combo); controls.addWidget(self.add_marker_btn); controls.addStretch()
+        controls.addWidget(QLabel("Tiles:")); controls.addWidget(self.map_tile_combo)
+        controls.addWidget(QLabel("Coords:")); controls.addWidget(self.coord_format_combo)
+        controls.addWidget(self.add_marker_btn); controls.addStretch()
         layout.addLayout(controls)
 
         self.map_view = QWebEngineView()
@@ -882,6 +930,7 @@ class DSDApp(QMainWindow):
         }
         self.current_tile = tile_map.get(self.map_tile_combo.currentText(), 'CartoDB dark_matter') if hasattr(self, 'map_tile_combo') else self.current_tile
         map_obj = folium.Map(location=[52.237, 21.017], zoom_start=6, tiles=self.current_tile)
+        MousePosition(position='topright', separator=' , ', numDigits=5).add_to(map_obj)
         for m in getattr(self, 'manual_markers', []):
             folium.Marker(location=[m['lat'], m['lon']], tooltip=m.get('label', 'Marker')).add_to(map_obj)
         map_obj.save(MAP_FILE)
@@ -1431,6 +1480,8 @@ class DSDApp(QMainWindow):
         if hasattr(self, 'device_combo2'):
             self.device_combo2.setVisible(enabled)
             self.device_combo2_label.setVisible(enabled)
+            if hasattr(self, 'mute_check2'):
+                self.mute_check2.setVisible(enabled)
         if hasattr(self, 'recorder_dir_edit2'):
             self.recorder_dir_edit2.setVisible(enabled)
             self.recorder_browse_btn2.setVisible(enabled)
@@ -1905,7 +1956,9 @@ class DSDApp(QMainWindow):
             if self.is_recording.get(channel) and self.wav_files.get(channel):
                 stereo = np.column_stack((data, np.zeros_like(data))) if channel == 1 else np.column_stack((np.zeros_like(data), data))
                 self.wav_files[channel].writeframes(stereo.astype(AUDIO_DTYPE).tobytes())
-            if not self.mute_check.isChecked() and channel in self.output_streams:
+            mute_map = {1: getattr(self, 'mute_check1', None), 2: getattr(self, 'mute_check2', None)}
+            mute = mute_map.get(channel)
+            if (not mute or not mute.isChecked()) and channel in self.output_streams:
                 try:
                     self.output_streams[channel].write((data * self.volume).astype(AUDIO_DTYPE))
                 except Exception:
@@ -1935,8 +1988,12 @@ class DSDApp(QMainWindow):
                     for frame in frames:
                         self.wav_files[ch].writeframes(frame.astype(AUDIO_DTYPE).tobytes())
 
-            if not self.mute_check.isChecked() and self.output_stream:
+            if self.output_stream:
                 for frame in frames:
+                    if getattr(self, 'mute_check1', None) and self.mute_check1.isChecked():
+                        frame[:, 0] = 0
+                    if getattr(self, 'mute_check2', None) and self.mute_check2.isChecked():
+                        frame[:, 1] = 0
                     try:
                         self.output_stream.write((frame * self.volume).astype(AUDIO_DTYPE))
                     except Exception:
@@ -2423,17 +2480,30 @@ class DSDApp(QMainWindow):
 
         if hasattr(self, 'eq_sliders'):
             eq_bands = [100, 300, 600, 1000, 3000, 6000]
-            sliders = self.eq_sliders.get(channel, []) if isinstance(self.eq_sliders, dict) else self.eq_sliders
+            mode = getattr(self, 'eq_mode', 'both_same')
+            if mode == 'both_same':
+                sliders = self.eq_sliders[1]
+            elif mode == 'separate':
+                sliders = self.eq_sliders.get(channel, [])
+            elif mode == 'port1':
+                sliders = self.eq_sliders[1] if channel == 1 else []
+            elif mode == 'port2':
+                sliders = self.eq_sliders[2] if channel == 2 else []
+            else:
+                sliders = self.eq_sliders.get(channel, [])
             for i, slider in enumerate(sliders):
                 gain_db = slider.value()
-                if abs(gain_db) > 0.1: # Apply only if there is a change
+                if abs(gain_db) > 0.1:  # Apply only if there is a change
                     center_freq = eq_bands[i]
                     q_factor = 3.0
-                    b, a = signal.iirpeak(center_freq, q_factor, fs=AUDIO_RATE, gain=gain_db)
-                    
-                    filter_name = f'eq_filter_{i}'
-                    if filter_name not in self.filter_states: self.filter_states[filter_name] = signal.lfilter_zi(b, a)
-                    samples_float, self.filter_states[filter_name] = signal.lfilter(b, a, samples_float, zi=self.filter_states[filter_name])
+                    b, a = signal.iirpeak(center_freq, q_factor, fs=AUDIO_RATE)
+                    b *= 10 ** (gain_db / 20.0)
+
+                    filter_name = f'eq_filter_{channel}_{i}'
+                    if filter_name not in self.filter_states:
+                        self.filter_states[filter_name] = signal.lfilter_zi(b, a)
+                    samples_float, self.filter_states[filter_name] = signal.lfilter(
+                        b, a, samples_float, zi=self.filter_states[filter_name])
 
 
         if self.widgets['nr_check'].isChecked():
