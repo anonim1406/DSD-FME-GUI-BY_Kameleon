@@ -959,78 +959,26 @@ class DSDApp(QMainWindow):
             <head>
                 <title>Map</title>
                 <meta charset=\"utf-8\" />
+                <link rel=\"stylesheet\" href=\"{leaflet_css}\" />
                 <style>
                     html, body, #map {{ height: 100%; margin: 0; }}
-codex/fix-keyerror-for-map_layout-n9olz3
-
-codex/fix-keyerror-for-map_layout-kwrc9z
-codex/fix-keyerror-for-map_layout-6zslwz
-main
-main
                 </style>
-                <link rel=\"stylesheet\" href=\"{leaflet_css}\" />
-                <script>
-                    function __initMap() {{
-                        var map = L.map('map', {{minZoom:0, maxZoom:2}}).setView([0,0], 1);
-                        var markers = L.layerGroup().addTo(map);
-                        L.tileLayer('{tiles_url}{{z}}/{{x}}/{{y}}.png', {{noWrap:true, minZoom:0, maxZoom:2, attribution:''}}).addTo(map);
-                        map.on('click', function(e) {{
-                            L.marker(e.latlng, {{draggable:true}}).addTo(markers);
-                        }});
-                        window.getMarkers = function() {{ return markers.getLayers().map(m => m.getLatLng()); }};
-                        window.setMarkers = function(data) {{
-                            markers.clearLayers();
-                            data.forEach(d => L.marker(d, {{draggable:true}}).addTo(markers));
-                        }};
-codex/fix-keyerror-for-map_layout-n9olz3
-                    }}
-                </script>
-                <script src=\"{leaflet_js}\"></script>
-                <script>
-                    document.addEventListener('DOMContentLoaded', __initMap);
-                </script>
-
-codex/fix-keyerror-for-map_layout-kwrc9z
-                    }}
-                </script>
-                <script src=\"{leaflet_js}\"></script>
-                <script>
-                    document.addEventListener('DOMContentLoaded', __initMap);
-                </script>
-
-                    }}
-                    function __loadLeafletModule() {{
-                        import('{leaflet_js}').then(m => {{ window.L = m; __initMap(); }});
-                    }}
-                </script>
-                <script src=\"{leaflet_js}\" onload=\"__initMap()\" onerror=\"__loadLeafletModule()\"></script>
-                </style> codex/fix-keyerror-for-map_layout-jc6dli
-                <link rel=\"stylesheet\" href=\"{leaflet_css}\" />
-                <script src=\"{leaflet_js}\"></script>
-                <link rel=\"stylesheet\" href=\"assets/leaflet/leaflet.css\" />
-                <script src=\"assets/leaflet/leaflet.js\"></script>
-main
-main
-main
-main
             </head>
             <body>
             <div id='map'></div>
+            <script src=\"{leaflet_js}\"></script>
             <script>
                 var map = L.map('map', {{minZoom:0, maxZoom:2}}).setView([0,0], 1);
                 var markers = L.layerGroup().addTo(map);
-                codex/fix-keyerror-for-map_layout-jc6dli
                 L.tileLayer('{tiles_url}{{z}}/{{x}}/{{y}}.png', {{noWrap:true, minZoom:0, maxZoom:2, attribution:''}}).addTo(map);
-                L.tileLayer('tiles/{{z}}/{{x}}/{{y}}.png', {{noWrap:true, minZoom:0, maxZoom:2, attribution:''}}).addTo(map);
-main
                 map.on('click', function(e) {{
                     L.marker(e.latlng, {{draggable:true}}).addTo(markers);
                 }});
-                function getMarkers() {{ return markers.getLayers().map(m => m.getLatLng()); }}
-                function setMarkers(data) {{
+                window.getMarkers = function() {{ return markers.getLayers().map(m => m.getLatLng()); }};
+                window.setMarkers = function(data) {{
                     markers.clearLayers();
                     data.forEach(d => L.marker(d, {{draggable:true}}).addTo(markers));
-                }}
+                }};
             </script>
             </body>
             </html>
@@ -1892,10 +1840,25 @@ main
             for p in self.processes:
                 if p and p.poll() is None:
                     p.terminate()
+                    try:
+                        p.wait(timeout=1)
+                    except Exception:
+                        pass
+            for thread in self.reader_threads:
+                thread.quit()
+                thread.wait()
+            self.processes.clear()
+            self.reader_workers.clear()
+            self.reader_threads.clear()
+            ready_msg = "\n--- READY ---\n"
+            for term in self.terminal_outputs_conf:
+                term.appendPlainText(ready_msg)
+            for term in self.terminal_outputs_dash:
+                term.appendPlainText(ready_msg)
 
     @pyqtSlot()
     def _on_reader_finished(self):
-        if any(p.poll() is None for p in self.processes):
+        if not self.processes or any(p.poll() is None for p in self.processes):
             return
         self.end_all_transmissions()
         self.set_ui_running_state(False)
