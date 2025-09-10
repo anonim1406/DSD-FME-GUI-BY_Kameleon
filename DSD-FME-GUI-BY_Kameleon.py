@@ -811,6 +811,9 @@ class DSDApp(QMainWindow):
             self.colormap_combo = QComboBox(); self.colormap_combo.addItems(self.colormaps.keys()); self.colormap_combo.currentTextChanged.connect(lambda name: self.imv.setColorMap(self.colormaps[name]))
             main_layout.addWidget(QLabel("Spectrogram:"), 6, 0); main_layout.addWidget(self.colormap_combo, 6, 1, 1, 2)
 
+            self.spec_source_combo = QComboBox(); self.spec_source_combo.addItems(["Port 1", "Port 2"]); self.spec_source_combo.currentIndexChanged.connect(lambda _ : self.spec_data.fill(MIN_DB))
+            main_layout.addWidget(QLabel("Spec Source:"), 6, 0); main_layout.addWidget(self.spec_source_combo, 6, 1, 1, 2)
+
             self.recorder_enabled_check_dash = QCheckBox("Enable Rec."); self.recorder_enabled_check_dash.toggled.connect(lambda state: self.recorder_enabled_check.setChecked(state)); self._add_widget('recorder_enabled_check_dash', self.recorder_enabled_check_dash)
             main_layout.addWidget(self.recorder_enabled_check_dash, 7, 0)
 
@@ -1390,6 +1393,11 @@ class DSDApp(QMainWindow):
         self.search_input.returnPressed.connect(self.search_in_log)
         layout.addWidget(splitter, 0, 0, 1, 2)
         layout.addWidget(self.search_input, 1, 0); layout.addWidget(self.search_button, 1, 1)
+
+        # Optional debug checkbox to toggle additional log output
+        self.debug_checkbox = self._add_widget('debug_check', QCheckBox("Debug"))
+        layout.addWidget(self.debug_checkbox, 2, 0, 1, 2)
+
         return outer_group
 
     def update_dual_tcp_ui(self, enabled):
@@ -2463,4 +2471,3 @@ if __name__ == '__main__':
         sys.exit(app.exec_())
     else:
         sys.exit(0)
-
