@@ -961,7 +961,9 @@ class DSDApp(QMainWindow):
                 <meta charset=\"utf-8\" />
                 <style>
                     html, body, #map {{ height: 100%; margin: 0; }}
+codex/fix-keyerror-for-map_layout-kwrc9z
 codex/fix-keyerror-for-map_layout-6zslwz
+main
                 </style>
                 <link rel=\"stylesheet\" href=\"{leaflet_css}\" />
                 <script>
@@ -977,6 +979,14 @@ codex/fix-keyerror-for-map_layout-6zslwz
                             markers.clearLayers();
                             data.forEach(d => L.marker(d, {{draggable:true}}).addTo(markers));
                         }};
+codex/fix-keyerror-for-map_layout-kwrc9z
+                    }}
+                </script>
+                <script src=\"{leaflet_js}\"></script>
+                <script>
+                    document.addEventListener('DOMContentLoaded', __initMap);
+                </script>
+
                     }}
                     function __loadLeafletModule() {{
                         import('{leaflet_js}').then(m => {{ window.L = m; __initMap(); }});
@@ -988,6 +998,7 @@ codex/fix-keyerror-for-map_layout-6zslwz
                 <script src=\"{leaflet_js}\"></script>
                 <link rel=\"stylesheet\" href=\"assets/leaflet/leaflet.css\" />
                 <script src=\"assets/leaflet/leaflet.js\"></script>
+main
 main
 main
             </head>
@@ -1748,8 +1759,14 @@ main
                     freq_str = f"{freq_val}{freq_map.get(unit, '')}"
                     rtl_params = [freq_str, gain, ppm, bw, sq, vol]
                     dev_index = self.widgets["rtl_dev"].currentData()
+codex/fix-keyerror-for-map_layout-kwrc9z
+                    if dev_index is None:
+                        dev_index = 0
+                    rtl_params.insert(0, str(dev_index))
+
                     if dev_index is not None:
                         rtl_params.insert(0, str(dev_index))
+main
                     cmd.extend(["-i", f"rtl:{':'.join(p for p in rtl_params if p)}"])
                 except ValueError:
                     QMessageBox.critical(self, "Error", "Invalid frequency value.")
