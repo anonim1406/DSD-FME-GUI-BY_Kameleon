@@ -959,78 +959,26 @@ class DSDApp(QMainWindow):
             <head>
                 <title>Map</title>
                 <meta charset=\"utf-8\" />
+                <link rel=\"stylesheet\" href=\"{leaflet_css}\" />
                 <style>
                     html, body, #map {{ height: 100%; margin: 0; }}
-codex/fix-keyerror-for-map_layout-n9olz3
-
-codex/fix-keyerror-for-map_layout-kwrc9z
-codex/fix-keyerror-for-map_layout-6zslwz
-main
-main
                 </style>
-                <link rel=\"stylesheet\" href=\"{leaflet_css}\" />
-                <script>
-                    function __initMap() {{
-                        var map = L.map('map', {{minZoom:0, maxZoom:2}}).setView([0,0], 1);
-                        var markers = L.layerGroup().addTo(map);
-                        L.tileLayer('{tiles_url}{{z}}/{{x}}/{{y}}.png', {{noWrap:true, minZoom:0, maxZoom:2, attribution:''}}).addTo(map);
-                        map.on('click', function(e) {{
-                            L.marker(e.latlng, {{draggable:true}}).addTo(markers);
-                        }});
-                        window.getMarkers = function() {{ return markers.getLayers().map(m => m.getLatLng()); }};
-                        window.setMarkers = function(data) {{
-                            markers.clearLayers();
-                            data.forEach(d => L.marker(d, {{draggable:true}}).addTo(markers));
-                        }};
-codex/fix-keyerror-for-map_layout-n9olz3
-                    }}
-                </script>
-                <script src=\"{leaflet_js}\"></script>
-                <script>
-                    document.addEventListener('DOMContentLoaded', __initMap);
-                </script>
-
-codex/fix-keyerror-for-map_layout-kwrc9z
-                    }}
-                </script>
-                <script src=\"{leaflet_js}\"></script>
-                <script>
-                    document.addEventListener('DOMContentLoaded', __initMap);
-                </script>
-
-                    }}
-                    function __loadLeafletModule() {{
-                        import('{leaflet_js}').then(m => {{ window.L = m; __initMap(); }});
-                    }}
-                </script>
-                <script src=\"{leaflet_js}\" onload=\"__initMap()\" onerror=\"__loadLeafletModule()\"></script>
-                </style> codex/fix-keyerror-for-map_layout-jc6dli
-                <link rel=\"stylesheet\" href=\"{leaflet_css}\" />
-                <script src=\"{leaflet_js}\"></script>
-                <link rel=\"stylesheet\" href=\"assets/leaflet/leaflet.css\" />
-                <script src=\"assets/leaflet/leaflet.js\"></script>
-main
-main
-main
-main
             </head>
             <body>
             <div id='map'></div>
+            <script src=\"{leaflet_js}\"></script>
             <script>
                 var map = L.map('map', {{minZoom:0, maxZoom:2}}).setView([0,0], 1);
                 var markers = L.layerGroup().addTo(map);
-                codex/fix-keyerror-for-map_layout-jc6dli
                 L.tileLayer('{tiles_url}{{z}}/{{x}}/{{y}}.png', {{noWrap:true, minZoom:0, maxZoom:2, attribution:''}}).addTo(map);
-                L.tileLayer('tiles/{{z}}/{{x}}/{{y}}.png', {{noWrap:true, minZoom:0, maxZoom:2, attribution:''}}).addTo(map);
-main
                 map.on('click', function(e) {{
                     L.marker(e.latlng, {{draggable:true}}).addTo(markers);
                 }});
-                function getMarkers() {{ return markers.getLayers().map(m => m.getLatLng()); }}
-                function setMarkers(data) {{
+                window.getMarkers = function() {{ return markers.getLayers().map(m => m.getLatLng()); }};
+                window.setMarkers = function(data) {{
                     markers.clearLayers();
                     data.forEach(d => L.marker(d, {{draggable:true}}).addTo(markers));
-                }}
+                }};
             </script>
             </body>
             </html>
@@ -1208,10 +1156,8 @@ main
         l_rtl.addWidget(QLabel("Squelch Level:"), 5, 0); l_rtl.addWidget(self.widgets["rtl_sq"], 5, 1)
         l_rtl.addWidget(QLabel("Sample Volume:"), 6, 0); l_rtl.addWidget(self.widgets["rtl_vol"], 6, 1)
         layout.addWidget(self.rtl_group)
-        # hide manual device selection; dsd-fme will pick first RTL automatically
-        self.rtl_dev_label.hide()
-        self.widgets["rtl_dev"].hide()
-        self.rtl_refresh_btn.hide()
+        # allow manual device selection when using RTL-SDR input
+        self._populate_rtl_devices()
 
         def toggle_input_options(text):
             is_rtl = (text == 'rtl')
@@ -1759,31 +1705,38 @@ main
                     QMessageBox.critical(self, "Error", "No audio input device selected.")
                     return []
             elif in_type == 'rtl':
-                try:
-                    freq_val = float(self.widgets["rtl_freq"].text())
-                    unit = self.widgets["rtl_unit"].currentText()
-                    gain = self.widgets["rtl_gain"].text()
-                    ppm = self.widgets["rtl_ppm"].text()
-                    bw = self.widgets["rtl_bw"].currentText()
-                    sq = self.widgets["rtl_sq"].text()
-                    vol = self.widgets["rtl_vol"].text()
-                    freq_map = {"MHz": "M", "KHz": "K", "GHz": "G", "Hz": ""}
-                    freq_str = f"{freq_val}{freq_map.get(unit, '')}"
-                    rtl_params = [freq_str, gain, ppm, bw, sq, vol]
-                    dev_index = self.widgets["rtl_dev"].currentData()
-                    if dev_index is None:
-                        dev_index = 0
-                    rtl_params.insert(0, str(dev_index))
-                    if dev_index is None:
-                        dev_index = 0
-                    rtl_params.insert(0, str(dev_index))
+                params = []
+                dev_index = self.widgets["rtl_dev"].currentData()
+                params.append(str(dev_index) if dev_index is not None else "")
 
-                    if dev_index is not None:
-                        rtl_params.insert(0, str(dev_index))
-                    cmd.extend(["-i", f"rtl:{':'.join(p for p in rtl_params if p)}"])
-                except ValueError:
-                    QMessageBox.critical(self, "Error", "Invalid frequency value.")
-                    return []
+                freq_text = self.widgets["rtl_freq"].text().strip()
+                if freq_text:
+                    try:
+                        freq_val = float(freq_text)
+                    except ValueError:
+                        QMessageBox.critical(self, "Error", "Invalid frequency value.")
+                        return []
+                    unit = self.widgets["rtl_unit"].currentText()
+                    freq_map = {"MHz": "M", "KHz": "K", "GHz": "G", "Hz": ""}
+                    params.append(f"{freq_val}{freq_map.get(unit, '')}")
+                else:
+                    params.append("")
+
+                params.extend([
+                    self.widgets["rtl_gain"].text().strip(),
+                    self.widgets["rtl_ppm"].text().strip(),
+                    self.widgets["rtl_bw"].currentText().strip(),
+                    self.widgets["rtl_sq"].text().strip(),
+                    self.widgets["rtl_vol"].text().strip(),
+                ])
+
+                while params and params[-1] == "":
+                    params.pop()
+
+                if any(params):
+                    cmd.extend(["-i", f"rtl:{':'.join(params)}"])
+                else:
+                    cmd.extend(["-i", "rtl"])
             else:
                 cmd.extend(["-i", in_type])
 
@@ -1892,10 +1845,25 @@ main
             for p in self.processes:
                 if p and p.poll() is None:
                     p.terminate()
+                    try:
+                        p.wait(timeout=1)
+                    except Exception:
+                        pass
+            for thread in self.reader_threads:
+                thread.quit()
+                thread.wait()
+            self.processes.clear()
+            self.reader_workers.clear()
+            self.reader_threads.clear()
+            ready_msg = "\n--- READY ---\n"
+            for term in self.terminal_outputs_conf:
+                term.appendPlainText(ready_msg)
+            for term in self.terminal_outputs_dash:
+                term.appendPlainText(ready_msg)
 
     @pyqtSlot()
     def _on_reader_finished(self):
-        if any(p.poll() is None for p in self.processes):
+        if not self.processes or any(p.poll() is None for p in self.processes):
             return
         self.end_all_transmissions()
         self.set_ui_running_state(False)
