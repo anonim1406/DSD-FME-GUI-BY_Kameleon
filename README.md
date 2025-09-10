@@ -31,6 +31,7 @@ DSD-FME GUI by Kameleon is a modern graphical interface for the powerful DSD-FME
   - Based on OpenStreetMap
   - Auto-markers using LRRP/GPS data
   - Dark theme consistent with the GUI
+  - For offline use place Leaflet resources in `assets/leaflet` and map tiles in `tiles/`
 - **Alias System:** Rename Talkgroups and Radio IDs for easier identification.
 - **Stats & Charts:** Activity graphs based on logbook data.
 - **Recording Manager:** Automatically records detected transmissions.
@@ -110,6 +111,7 @@ DSD-FME GUI by Kameleon to zaawansowany interfejs graficzny dla dekodera mowy cy
 - **Widok Mapy:**
   - OpenStreetMap w ciemnym motywie
   - Automatyczne znaczniki z GPS/LRRP
+  - Do pracy offline umieść pliki Leaflet w `assets/leaflet` i kafelki map w `tiles/`
 - **Aliasowanie:** Własne nazwy dla Talkgroupów i Radio ID
 - **Statystyki i wykresy:** Najaktywniejsze grupy i użytkownicy
 - **Menedżer nagrań:** Nagrywanie po wykryciu transmisji
