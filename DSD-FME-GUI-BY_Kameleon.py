@@ -331,6 +331,9 @@ class NumericTableWidgetItem(QTableWidgetItem):
 
 
 class DSDApp(QMainWindow):
+    def map_loading_finished(self):
+        """Called when the map page has finished loading."""
+        print("Map has finished loading.")
     def __init__(self):
         super().__init__()
         self.processes = []
@@ -347,11 +350,8 @@ class DSDApp(QMainWindow):
 # audio device selectors are created later; define placeholders so
 # early audio initialisation does not crash if they are accessed
         self.device_combo1 = None
-        self.device_combo2 = None
         # audio device selectors are created later; define placeholders so
         # early audio initialisation does not crash if they are accessed
-        self.device_combo1 = None
-        self.device_combo2 = None
         self.current_tile = 'CartoDB dark_matter'; self.manual_markers = []
         self.geojson_layers = []
         self.filter_states = {}
@@ -942,125 +942,64 @@ class DSDApp(QMainWindow):
         self.map_view.setUrl(QUrl.fromLocalFile(os.path.abspath(MAP_FILE)))
         layout.addWidget(self.map_view)
         return widget
-
     def create_initial_map(self):
-        tile_urls = {
-            'Dark': 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-            'Satellite': 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-            'Topo': 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png'
-        }
-        tile_url = tile_urls.get(self.map_tile_combo.currentText(), tile_urls['Dark']) if hasattr(self, 'map_tile_combo') else tile_urls['Dark']
-        initial_markers = json.dumps(getattr(self, 'initial_markers', []))
-        mgrs_grid = 'true' if self.coord_format_combo.currentText() == 'MGRS' else 'false'
         html = f"""
-<!DOCTYPE html><html><head>
-<meta charset='utf-8'/>
-<link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'/>
-<link rel='stylesheet' href='https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css'/>
-<link rel='stylesheet' href='https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css'/>
-<script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
-<script src='https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js'></script>
-<script src='https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js'></script>
-<script src='https://cdn.jsdelivr.net/npm/mgrs@1.0.0/mgrs.min.js'></script>
-<script src='https://cdn.jsdelivr.net/npm/leaflet-mgrs@2.0.0/dist/leaflet-mgrs.min.js'></script>
-<script src='https://unpkg.com/leaflet-mouse-position@1.0.0/src/L.Control.MousePosition.js'></script>
-<script src='https://unpkg.com/milsymbol@2.1.0/dist/milsymbol.js'></script>
-<style>
-html,body,#map{{height:100%;margin:0;}}
-#map{{width:80%;float:left;cursor:crosshair;}}
-#palette{{width:20%;float:right;height:100%;overflow:auto;border-left:1px solid #888;padding:4px;background:#f0f0f0;}}
-.symbol{{width:32px;height:32px;margin:4px;cursor:grab;}}
-</style>
-</head>
-<body>
-<div id='map'></div>
-<div id='palette'>
- <input id='searchBox' placeholder='Place or MGRS' style='width:120px'/>
- <button onclick='doSearch()'>Go</button>
- <hr/>
- <input type='file' id='loadInput' style='display:none'/>
- <button onclick="document.getElementById('loadInput').click()">Load</button>
- <button onclick='saveSymbols()'>Save</button>
- <hr/>
- <div id='icons'></div>
-</div>
-<script>
-var coordFormat = { 'true':'MGRS','false':'Lat/Lon' }[{mgrs_grid}];
-var map = L.map('map').setView([52.237,21.017],6);
-L.tileLayer('{tile_url}',{{maxZoom:18}}).addTo(map);
-if({mgrs_grid}){{ L.grids.mgrs().addTo(map); }}
-var geocoder = L.Control.Geocoder.nominatim();
-L.control.mousePosition({{position:'bottomleft',formatter:function(ll){{return coordFormat=='MGRS'?mgrs.forward([ll.lng,ll.lat]):ll.lat.toFixed(5)+', '+ll.lng.toFixed(5);}}}}).addTo(map);
-var markers = [];
-function addMarker(latlng,iconUrl,note){{
-  var icon = L.icon({{iconUrl:iconUrl,iconSize:[32,32]}});
-  var m = L.marker(latlng,{{icon:icon,draggable:false}}).addTo(map);
-  if(note) m.bindPopup(note);
-  markers.push({{lat:latlng.lat,lon:latlng.lng,icon:iconUrl,note:note}});
-}}
-function setMarkers(list){{
-  markers=[]; map.eachLayer(function(layer){{ if(layer instanceof L.Marker) map.removeLayer(layer); }});
-  list.forEach(function(m){{ addMarker([m.lat,m.lon],m.icon,m.note); }});
-}}
-function getMarkers(){{ return markers; }}
-function buildPalette(){{
-  var sidcs=['SFGPUCI----K---','SHGPUCI----K---'];
-  var container=document.getElementById('icons');
-  sidcs.forEach(function(code){{
-    var sym=new ms.Symbol(code,{{size:32}});
-    var img=document.createElement('img');
-    img.src=sym.toDataURL();
-    img.className='symbol';
-    img.draggable=true;
-    img.dataset.sidc=code;
-    container.appendChild(img);
-    img.addEventListener('dragstart',function(e){{e.dataTransfer.setData('sidc',code);}});
-  }});
-}}
-buildPalette();
-map.getContainer().addEventListener('dragover',function(e){{ e.preventDefault(); }});
-map.getContainer().addEventListener('drop',function(e){{
-  e.preventDefault();
-  var code = e.dataTransfer.getData('sidc');
-  if(!code) return;
-  var latlng = map.mouseEventToLatLng(e);
-  var sym=new ms.Symbol(code,{{size:32}});
-  var note = prompt('Note:','');
-  addMarker(latlng,sym.toDataURL(),note);
-}});
-map.on('contextmenu',function(e){{
-  var coord = coordFormat=='MGRS'?mgrs.forward([e.latlng.lng,e.latlng.lat]):e.latlng.lat.toFixed(5)+', '+e.latlng.lng.toFixed(5);
-  if(confirm('Location: '+coord+'\nAdd pin here?')){{
-     var sym=new ms.Symbol('SFGPUCI----K---',{{size:32}});
-     var note = prompt('Note:','');
-     addMarker(e.latlng,sym.toDataURL(),note);
-  }}
-}});
-function saveSymbols(){{
-  var data = JSON.stringify(markers);
-  var blob = new Blob([data],{{type:'application/json'}});
-  var a = document.createElement('a');
-  a.href = URL.createObjectURL(blob); a.download='map.json'; a.click();
-}}
-document.getElementById('loadInput').addEventListener('change',function(evt){{
-  var file = evt.target.files[0]; if(!file)return; var reader = new FileReader();
-  reader.onload=function(e){{ var data=JSON.parse(e.target.result); setMarkers(data); }}; reader.readAsText(file);
-}});
-function doSearch(){{
-  var q = document.getElementById('searchBox').value;
-  try{{ var p = mgrs.toPoint(q); map.setView([p[1],p[0]],14); }}catch(err){{
-    geocoder.geocode(q, function(res){{ if(res.length>0) map.setView(res[0].center,14); }});
-  }}
-}}
-setMarkers({initial_markers});
-</script>
-</body></html>
-"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Map</title>
+                <style>
+                    html, body, #map {{
+                        height: 100%;
+                        margin: 0;
+                    }}
+                </style>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+                <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"/>
+                <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+                <script src="https://cdn.jsdelivr.net/npm/leaflet.grid@0.3.0/leaflet-grid.js"></script>
+                <script src="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+                <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+                <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+                <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+                <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+                {MGRS_LIB}
+                <style>
+                    .lrrp-marker {{
+                        animation: pulse 2s infinite;
+                    }}
+                    @keyframes pulse {{
+                        0% {{
+                            transform: scale(0.9);
+                            box-shadow: 0 0 0 0 rgba(204, 169, 44, 0.4);
+                        }}
+                        70% {{
+                            transform: scale(1);
+                            box-shadow: 0 0 0 10px rgba(204, 169, 44, 0);
+                        }}
+                        100% {{
+                            transform: scale(0.9);
+                            box-shadow: 0 0 0 0 rgba(204, 169, 44, 0);
+                        }}
+                    }}
+                </style>
+            </head>
+            <body>
+            <div id='map'></div>
+            </body>
+            </html>
+        """
+        if os.path.exists(MAP_FILE):
+            os.remove(MAP_FILE)
+
         with open(MAP_FILE, 'w', encoding='utf-8') as f:
             f.write(html)
-        if hasattr(self, 'map_view') and self.map_mode_combo.currentText() == '2D':
-            self.map_view.setUrl(QUrl.fromLocalFile(os.path.abspath(MAP_FILE)))
-            self.map_view.reload()
+
+        self.map_view = QWebEngineView(self)
+        self.map_view.setUrl(QUrl.fromLocalFile(os.path.abspath(MAP_FILE)))
+        self.map_view.page().profile().clearHttpCache()
+        self.map_view.loadFinished.connect(self.map_loading_finished)
+        self.widgets['map_layout'].addWidget(self.map_view)
 
     def export_map_png(self):
         path, _ = QFileDialog.getSaveFileName(self, "Export Map to PNG", "", "PNG Files (*.png)")
@@ -2117,8 +2056,6 @@ setMarkers({initial_markers});
                     pass
 # audio device selectors are created later; define placeholders so
 # early audio initialisation does not crash if they are accessed
-        self.device_combo1 = None
-        self.device_combo2 = None
         else:
             frames = []
             n = min(len(self.channel_buffers[1]), len(self.channel_buffers[2]))
