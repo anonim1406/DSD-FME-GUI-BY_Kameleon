@@ -1210,17 +1210,17 @@ class DSDApp(QMainWindow):
         return group
 
     def _create_terminal_group(self):
-        group = QGroupBox("Terminal Log"); layout = QGridLayout(group)
+        outer_group = QGroupBox("Terminal Log"); layout = QGridLayout(outer_group)
         splitter = QSplitter(Qt.Horizontal)
         self.terminal_outputs_conf = [QPlainTextEdit(), QPlainTextEdit()]
         self.terminal_conf_groups = []
         for i, term in enumerate(self.terminal_outputs_conf, start=1):
             term.setReadOnly(True)
-            group = QGroupBox(f"Port {i}")
-            v = QVBoxLayout(group)
+            port_group = QGroupBox(f"Port {i}")
+            v = QVBoxLayout(port_group)
             v.addWidget(term)
-            splitter.addWidget(group)
-            self.terminal_conf_groups.append(group)
+            splitter.addWidget(port_group)
+            self.terminal_conf_groups.append(port_group)
         self.terminal_conf_groups[1].setVisible(False)
         self.terminal_splitter_conf = splitter
 
@@ -1229,7 +1229,7 @@ class DSDApp(QMainWindow):
         self.search_input.returnPressed.connect(self.search_in_log)
         layout.addWidget(splitter, 0, 0, 1, 2)
         layout.addWidget(self.search_input, 1, 0); layout.addWidget(self.search_button, 1, 1)
-        return group
+        return outer_group
 
     def update_dual_tcp_ui(self, enabled):
         if hasattr(self, 'terminal_conf_groups'):
