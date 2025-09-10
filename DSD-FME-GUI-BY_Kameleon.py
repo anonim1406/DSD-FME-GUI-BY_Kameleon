@@ -344,6 +344,10 @@ class DSDApp(QMainWindow):
         self.transmission_log = {}
         self.last_logged_id = [None, None]
         self.output_stream = None; self.output_streams = {}; self.volume = 1.0
+# audio device selectors are created later; define placeholders so
+# early audio initialisation does not crash if they are accessed
+        self.device_combo1 = None
+        self.device_combo2 = None
         # audio device selectors are created later; define placeholders so
         # early audio initialisation does not crash if they are accessed
         self.device_combo1 = None
@@ -1589,6 +1593,11 @@ setMarkers({initial_markers});
         self.search_input.returnPressed.connect(self.search_in_log)
         layout.addWidget(splitter, 0, 0, 1, 2)
         layout.addWidget(self.search_input, 1, 0); layout.addWidget(self.search_button, 1, 1)
+
+        # Optional debug checkbox to toggle additional log output
+        self.debug_checkbox = self._add_widget('debug_check', QCheckBox("Debug"))
+        layout.addWidget(self.debug_checkbox, 2, 0, 1, 2)
+
         return outer_group
 
     def update_dual_tcp_ui(self, enabled):
@@ -2103,6 +2112,10 @@ setMarkers({initial_markers});
             if (not mute or not mute.isChecked()) and channel in self.output_streams:
                 try:
                     self.output_streams[channel].write((data * self.volume).astype(AUDIO_DTYPE))
+# audio device selectors are created later; define placeholders so
+# early audio initialisation does not crash if they are accessed
+        self.device_combo1 = None
+        self.device_combo2 = None
                 except Exception:
                     pass
         else:
@@ -2686,4 +2699,3 @@ if __name__ == '__main__':
         sys.exit(app.exec_())
     else:
         sys.exit(0)
-
