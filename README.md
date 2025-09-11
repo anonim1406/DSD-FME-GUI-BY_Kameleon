@@ -8,7 +8,7 @@
 
 DSD-FME GUI by Kameleon is a modern graphical interface for the powerful DSD-FME digital voice decoder. No more terminal commands – just configure, monitor, analyze, and archive transmissions in an intuitive environment.
 
-First Launch Instructions & Example SDR++ Connection [here:](https://github.com/anonim1406/DSD-FME-GUI-BY_Kameleon/blob/main/instruction.md)
+## First Launch Instructions & Example SDR++ Connection [here:](https://github.com/anonim1406/DSD-FME-GUI-BY_Kameleon/blob/main/instruction.md)
 
 ## 🚀 What’s New in v3.0
 - **Dual TCP Listener** – Added the option to listen to **two TCP ports simultaneously** (requires two separate copies of DSD-FME).  
@@ -44,7 +44,7 @@ Huge thanks to **lwvmobile** and the entire community behind DSD and DSD-FME. Wi
 > Nie jestem autorem DSD-FME – stworzyłem tylko graficzną nakładkę. Cała zasługa należy do twórców oryginalnego DSD i DSD-FME.  
 > Program DSD-FME można pobrać tutaj: [https://github.com/lwvmobile/dsd-fme](https://github.com/lwvmobile/dsd-fme)
 
-Instrukcja pierwszego uruchomienia i przykładowe połączenie z SDR++ [tutaj:](https://github.com/anonim1406/DSD-FME-GUI-BY_Kameleon/blob/main/instruction.md)
+## Instrukcja pierwszego uruchomienia i przykładowe połączenie z SDR++ [tutaj:](https://github.com/anonim1406/DSD-FME-GUI-BY_Kameleon/blob/main/instruction.md)
 
 ---
 
