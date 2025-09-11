@@ -740,8 +740,8 @@ class DSDApp(QMainWindow):
         left_panel_splitter.addWidget(self.histogram)
 
         self.mini_logbook_table = QTableWidget()
-        self.mini_logbook_table.setColumnCount(6)
-        self.mini_logbook_table.setHorizontalHeaderLabels(["Start", "End", "Duration", "TG", "ID", "CC"])
+        self.mini_logbook_table.setColumnCount(7)
+        self.mini_logbook_table.setHorizontalHeaderLabels(["Start", "End", "Duration", "Port", "TG", "ID", "CC"])
         self.mini_logbook_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.mini_logbook_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.mini_logbook_table.verticalHeader().setVisible(False)
@@ -1362,8 +1362,8 @@ class DSDApp(QMainWindow):
         filter_layout.addWidget(self.logbook_filter_btn, 3, 0, 1, 2)
 
         self.logbook_table = QTableWidget()
-        self.logbook_table.setColumnCount(8)
-        self.logbook_table.setHorizontalHeaderLabels(["Start Time","End Time","Duration","Talkgroup","Radio ID","Color Code", "Tags", "Notes"])
+        self.logbook_table.setColumnCount(9)
+        self.logbook_table.setHorizontalHeaderLabels(["Start Time","End Time","Duration","Port","Talkgroup","Radio ID","Color Code", "Tags", "Notes"])
         self.logbook_table.setEditTriggers(QAbstractItemView.DoubleClicked)
         self.logbook_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.logbook_table.setSortingEnabled(True)
@@ -1371,7 +1371,7 @@ class DSDApp(QMainWindow):
         self.logbook_table.verticalHeader().setVisible(False)
 
         header = self.logbook_table.horizontalHeader()
-        header.setSectionResizeMode(7, QHeaderView.Stretch)
+        header.setSectionResizeMode(8, QHeaderView.Stretch)
 
         button_layout = QHBoxLayout()
         self.import_csv_button = QPushButton("Import CSV"); self.import_csv_button.clicked.connect(self.import_csv_to_logbook)
@@ -1508,11 +1508,29 @@ class DSDApp(QMainWindow):
         layout.addWidget(splitter, 0, 0, 1, 2)
         layout.addWidget(self.search_input, 1, 0); layout.addWidget(self.search_button, 1, 1)
 
+        self.save_log_btn1 = QPushButton("Save Port 1 Log")
+        self.save_log_btn1.clicked.connect(lambda: self.save_terminal_log(1))
+        self.save_log_btn2 = QPushButton("Save Port 2 Log")
+        self.save_log_btn2.clicked.connect(lambda: self.save_terminal_log(2))
+        self.save_log_btn2.setVisible(False)
+        layout.addWidget(self.save_log_btn1, 2, 0); layout.addWidget(self.save_log_btn2, 2, 1)
+
         # Optional debug checkbox to toggle additional log output
         self.debug_checkbox = self._add_widget('debug_check', QCheckBox("Debug"))
-        layout.addWidget(self.debug_checkbox, 2, 0, 1, 2)
+        layout.addWidget(self.debug_checkbox, 3, 0, 1, 2)
 
         return outer_group
+
+    def save_terminal_log(self, port):
+        if port - 1 < len(self.terminal_outputs_conf):
+            text = self.terminal_outputs_conf[port - 1].toPlainText()
+            path, _ = QFileDialog.getSaveFileName(self, f"Save Port {port} Log", f"port{port}_log.txt", "Text Files (*.txt)")
+            if path:
+                try:
+                    with open(path, 'w', encoding='utf-8') as f:
+                        f.write(text)
+                except Exception as e:
+                    QMessageBox.warning(self, "Save Log", f"Could not save log: {e}")
 
     def update_dual_tcp_ui(self, enabled):
         if hasattr(self, 'terminal_conf_groups'):
@@ -1521,6 +1539,8 @@ class DSDApp(QMainWindow):
                 self.terminal_splitter_conf.setSizes([1, 1])
             else:
                 self.terminal_splitter_conf.setSizes([1, 0])
+        if hasattr(self, 'save_log_btn2'):
+            self.save_log_btn2.setVisible(enabled)
         if hasattr(self, 'dashboard_dash_groups'):
             self.dashboard_dash_groups[1].setVisible(enabled)
             if enabled:
@@ -1866,6 +1886,7 @@ class DSDApp(QMainWindow):
                 panels.append(self.live_labels_conf[idx])
             if idx < len(self.live_labels_dash):
                 panels.append(self.live_labels_dash[idx])
+            channel = idx + 1
             if "TGT=" in text and "SRC=" in text:
                 self.current_tg[idx] = text.split("TGT=")[1].split(" ")[0].strip()
                 self.current_id[idx] = text.split("SRC=")[1].split(" ")[0].strip()
@@ -1889,13 +1910,13 @@ class DSDApp(QMainWindow):
                             panel['last_voice'].setText(timestamp)
                     if self.current_id[idx] and self.current_id[idx] != self.last_logged_id[idx]:
                         self.end_all_transmissions(end_current=False)
-                        self.start_new_log_entry(self.current_id[idx], self.current_tg[idx], self.current_cc[idx])
+                        self.start_new_log_entry(self.current_id[idx], self.current_tg[idx], self.current_cc[idx], channel)
                         self.last_logged_id[idx] = self.current_id[idx]
                         if self.recorder_enabled_check.isChecked():
-                            if self.is_recording.get(idx, False):
-                                self.stop_internal_recording(idx)
-                            self.start_internal_recording(self.current_id[idx], idx)
-                        self.check_for_alerts(self.current_tg[idx], self.current_id[idx], idx)
+                            if self.is_recording.get(channel, False):
+                                self.stop_internal_recording(channel)
+                            self.start_internal_recording(self.current_id[idx], channel)
+                        self.check_for_alerts(self.current_tg[idx], self.current_id[idx], channel)
                 elif not self.is_in_transmission[idx]:
                     for panel in panels:
                         panel['status'].setText("SYNC")
@@ -1906,15 +1927,20 @@ class DSDApp(QMainWindow):
                 self.end_all_transmissions()
                 for panel in panels:
                     panel['status'].setText("SYNC")
+codex/zmien-miejsce-zapisywania-ustawien-4qljbp
+                if self.is_recording.get(channel, False):
+                    self.stop_internal_recording(channel)
+
                 if self.is_recording.get(idx, False):
                     self.stop_internal_recording(idx)
+      main
                 self.current_id[idx] = None
                 self.current_tg[idx] = None
                 self.last_logged_id[idx] = None
         except Exception as e:
             print(f"Log parse error: {e}")
 
-    def start_new_log_entry(self, id_val, tg_val, cc_val):
+    def start_new_log_entry(self, id_val, tg_val, cc_val, channel):
         start_time = datetime.now()
         start_time_str = start_time.strftime("%Y-%m-%d %H:%M:%S")
         tg_alias = self.aliases['tg'].get(tg_val, tg_val) or "N/A"
@@ -1922,39 +1948,50 @@ class DSDApp(QMainWindow):
 
         row_items = [
             QTableWidgetItem(start_time_str), QTableWidgetItem(""), QTableWidgetItem(""),
-            QTableWidgetItem(tg_alias), QTableWidgetItem(id_alias), QTableWidgetItem(cc_val or "N/A"),
+            QTableWidgetItem(str(channel)), QTableWidgetItem(tg_alias), QTableWidgetItem(id_alias), QTableWidgetItem(cc_val or "N/A"),
             QTableWidgetItem(""), QTableWidgetItem("")
         ]
 
         for i in range(len(row_items)):
-            if i < 6:
+            if i < 7:
                 row_items[i].setFlags(row_items[i].flags() & ~Qt.ItemIsEditable)
 
         self.logbook_table.insertRow(0)
         for i, item in enumerate(row_items):
-            if i == 3: item.setData(Qt.UserRole, tg_val)
-            elif i == 4: item.setData(Qt.UserRole, id_val)
+            if i == 4:
+                item.setData(Qt.UserRole, tg_val)
+            elif i == 5:
+                item.setData(Qt.UserRole, id_val)
             self.logbook_table.setItem(0, i, item)
 
         self.mini_logbook_table.insertRow(0)
-        for i in range(6):
+        for i in range(7):
             self.mini_logbook_table.setItem(0, i, row_items[i].clone())
         if self.mini_logbook_table.rowCount() > 10:
             self.mini_logbook_table.removeRow(10)
 
-        self.transmission_log[id_val] = {'start_time': start_time, 'tg': tg_val, 'id_alias': id_alias}
+        key = f"{id_val}_{channel}"
+        self.transmission_log[key] = {'start_time': start_time, 'tg': tg_val, 'id_alias': id_alias, 'channel': channel}
 
 
     def end_all_transmissions(self, end_current=True):
         end_time = datetime.now()
         end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
 
+        dual = self.widgets.get('dual_tcp') and self.widgets['dual_tcp'].isChecked()
         for log_data in self.transmission_log.values():
-            duration = end_time - log_data['start_time']; duration_str = str(duration).split('.')[0]
-            for panel in self.live_labels_conf + self.live_labels_dash:
-                panel and panel['duration'].setText(duration_str)
+            duration = end_time - log_data['start_time']
+            duration_str = str(duration).split('.')[0]
+            channel = log_data.get('channel', 1)
+            dur_text = f"{duration_str} (P{channel})" if dual else duration_str
+            if len(self.live_labels_conf) >= channel and self.live_labels_conf[channel-1]:
+                self.live_labels_conf[channel-1]['duration'].setText(dur_text)
+            if len(self.live_labels_dash) >= channel and self.live_labels_dash[channel-1]:
+                self.live_labels_dash[channel-1]['duration'].setText(dur_text)
             for r in range(self.logbook_table.rowCount()):
-                if self.logbook_table.item(r,4) and self.logbook_table.item(r,4).text() == log_data['id_alias'] and (not self.logbook_table.item(r,1) or not self.logbook_table.item(r,1).text()):
+                if (self.logbook_table.item(r,5) and self.logbook_table.item(r,5).text() == log_data['id_alias'] and
+                    self.logbook_table.item(r,3) and self.logbook_table.item(r,3).text() == str(channel) and
+                    (not self.logbook_table.item(r,1) or not self.logbook_table.item(r,1).text())):
                     end_item = QTableWidgetItem(end_time_str)
                     end_item.setFlags(end_item.flags() & ~Qt.ItemIsEditable)
                     self.logbook_table.setItem(r, 1, end_item)
@@ -1964,7 +2001,9 @@ class DSDApp(QMainWindow):
                     self.logbook_table.setItem(r, 2, dur_item)
                     break
             for r in range(self.mini_logbook_table.rowCount()):
-                if self.mini_logbook_table.item(r,4) and self.mini_logbook_table.item(r,4).text() == log_data['id_alias'] and (not self.mini_logbook_table.item(r,1) or not self.mini_logbook_table.item(r,1).text()):
+                if (self.mini_logbook_table.item(r,5) and self.mini_logbook_table.item(r,5).text() == log_data['id_alias'] and
+                    self.mini_logbook_table.item(r,3) and self.mini_logbook_table.item(r,3).text() == str(channel) and
+                    (not self.mini_logbook_table.item(r,1) or not self.mini_logbook_table.item(r,1).text())):
                     self.mini_logbook_table.setItem(r,1,QTableWidgetItem(end_time_str.split(" ")[1]))
                     self.mini_logbook_table.setItem(r,2,QTableWidgetItem(duration_str))
                     break
@@ -2207,8 +2246,8 @@ class DSDApp(QMainWindow):
 
             filtered_rows += 1
 
-            tg_item = self.logbook_table.item(row, 3)
-            id_item = self.logbook_table.item(row, 4)
+            tg_item = self.logbook_table.item(row, 4)
+            id_item = self.logbook_table.item(row, 5)
             if tg_item and tg_item.data(Qt.UserRole):
                 tg_counts[tg_item.data(Qt.UserRole)] += 1
             if id_item and id_item.data(Qt.UserRole):
@@ -2388,7 +2427,7 @@ class DSDApp(QMainWindow):
                         self.logbook_table.insertRow(row)
                         for i, data in enumerate(row_data):
                             item = QTableWidgetItem(data)
-                            if i < 6:
+                            if i < 7:
                                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                             self.logbook_table.setItem(row, i, item)
                     self.logbook_table.setSortingEnabled(True)
