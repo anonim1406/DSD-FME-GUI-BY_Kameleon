@@ -1932,7 +1932,6 @@ class DSDApp(QMainWindow):
 
                 if self.is_recording.get(idx, False):
                     self.stop_internal_recording(idx)
-      main
                 self.current_id[idx] = None
                 self.current_tg[idx] = None
                 self.last_logged_id[idx] = None
