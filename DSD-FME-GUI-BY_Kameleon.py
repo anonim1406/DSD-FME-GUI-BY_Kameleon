@@ -1927,8 +1927,13 @@ class DSDApp(QMainWindow):
                 self.end_all_transmissions()
                 for panel in panels:
                     panel['status'].setText("SYNC")
+codex/zmien-miejsce-zapisywania-ustawien-4qljbp
                 if self.is_recording.get(channel, False):
                     self.stop_internal_recording(channel)
+
+                if self.is_recording.get(idx, False):
+                    self.stop_internal_recording(idx)
+      main
                 self.current_id[idx] = None
                 self.current_tg[idx] = None
                 self.last_logged_id[idx] = None
