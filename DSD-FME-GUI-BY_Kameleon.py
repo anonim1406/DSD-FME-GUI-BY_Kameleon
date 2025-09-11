@@ -23,15 +23,13 @@ os.makedirs(APP_DATA_DIR, exist_ok=True)
 
 
 def resource_path(relative_path):
-    try:
+    if getattr(sys, "_MEIPASS", None):
         base_path = sys._MEIPASS
-    except Exception:
-        base_path = APP_DATA_DIR
-        if relative_path in ['dsd-fme.exe', 'dsd-fme']:
-             base_path = os.path.abspath(".")
+    else:
+        base_path = os.path.abspath(".")
 
-    local_path = os.path.join(os.path.abspath("."), relative_path)
-    appdata_path = os.path.join(base_path, relative_path)
+    local_path = os.path.join(base_path, relative_path)
+    appdata_path = os.path.join(APP_DATA_DIR, relative_path)
 
     if not os.path.exists(appdata_path) and os.path.exists(local_path) and relative_path not in ['dsd-fme.exe', 'dsd-fme']:
         import shutil
@@ -41,13 +39,13 @@ def resource_path(relative_path):
             print(f"Could not copy file {relative_path} to AppData: {e}")
             return local_path
 
-    if relative_path.endswith('.json') or relative_path.endswith('.html'):
-        return appdata_path
-
     if relative_path in ['dsd-fme.exe', 'dsd-fme']:
         return os.path.join(os.path.abspath("."), relative_path)
 
-    return appdata_path
+    if relative_path.endswith('.json') or relative_path.endswith('.html'):
+        return appdata_path
+
+    return local_path
 
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import QFont, QPalette, QColor, QTextCursor, QKeySequence, QDesktopServices
@@ -1885,7 +1883,7 @@ class DSDApp(QMainWindow):
                 if is_voice:
                     self.is_in_transmission[idx] = True
                     for panel in panels:
-                        panel['status'].setText("VOICE CALL")
+                        panel['status'].setText("VOICE")
                         panel['duration'].setText("In Progress...")
                         if timestamp:
                             panel['last_voice'].setText(timestamp)
@@ -1900,14 +1898,14 @@ class DSDApp(QMainWindow):
                         self.check_for_alerts(self.current_tg[idx], self.current_id[idx], idx)
                 elif not self.is_in_transmission[idx]:
                     for panel in panels:
-                        panel['status'].setText(text.strip().replace("Sync: ", ""))
+                        panel['status'].setText("SYNC")
                         if timestamp:
                             panel['last_sync'].setText(timestamp)
             if "Sync: no sync" in text and self.is_in_transmission[idx]:
                 self.is_in_transmission[idx] = False
                 self.end_all_transmissions()
                 for panel in panels:
-                    panel['status'].setText("No Sync")
+                    panel['status'].setText("SYNC")
                 if self.is_recording.get(idx, False):
                     self.stop_internal_recording(idx)
                 self.current_id[idx] = None
