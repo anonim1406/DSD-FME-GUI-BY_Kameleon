@@ -6,7 +6,7 @@
 ## 🇬🇧 Instructions in English
 
 1. Download **SDR++** from its official repository: [SDR++ GitHub](https://github.com/AlexandreRouma/SDRPlusPlus).  
-2. Download **DSD-FME GUI BY Kameleon**.  
+2. Download **DSD-FME GUI BY Kameleon**.  [Releases](https://github.com/anonim1406/DSD-FME-GUI-BY_Kameleon/releases/tag/DSD-FME-GUI-BY-Kameleon)
 3. Download **two separate copies of DSD-FME** – link here: [DSD-FME GitHub](https://github.com/lwvmobile/dsd-fme).  
 4. Place the GUI and both DSD-FME copies in the same folder.  
 5. Launch **SDR++**.  
@@ -28,7 +28,7 @@
 ## 🇵🇱 Instrukcja po polsku
 
 1. Pobierz **SDR++** z oficjalnego repozytorium: [SDR++ GitHub](https://github.com/AlexandreRouma/SDRPlusPlus).  
-2. Pobierz **DSD-FME GUI BY Kameleon**.  
+2. Pobierz **DSD-FME GUI BY Kameleon**.  [Releases](https://github.com/anonim1406/DSD-FME-GUI-BY_Kameleon/releases/tag/DSD-FME-GUI-BY-Kameleon)
 3. Pobierz **dwie niezależne kopie programu DSD-FME** – link tutaj: [DSD-FME GitHub](https://github.com/lwvmobile/dsd-fme).  
 4. Umieść GUI i obie kopie DSD-FME w jednym folderze.  
 5. Uruchom **SDR++**.  
